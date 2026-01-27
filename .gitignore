@@ -28,7 +28,6 @@ build/
 *.egg-info/
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
