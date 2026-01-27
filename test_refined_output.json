@@ -1,0 +1,66 @@
+{
+  "refinedVersion": "2025.10",
+  "flow_name": "Test Flow",
+  "flow_id": "ggggg",
+  "generated_at": "2026-01-15T14:20:09.557098+00:00",
+  "original_url": "https://onecognizant.cognizant.com/welcome",
+  "pages": [
+    {
+      "pageId": "page-1",
+      "pageUrl": "https://onecognizant.cognizant.com/welcome",
+      "pageTitle": "OneCognizant",
+      "mainHeading": null
+    },
+    {
+      "pageId": "page-2",
+      "pageUrl": "https://cloud.guidewire.net/auth/callback?code=yB9CI1MxPrX5ejdxeBWUdAOhqwpR46YD08Mwq_bPBX8&state=UZnowbpbztHikKNA6VVdLxzfQbZFiftVTi8OiJPz6CIs0VX6pxXwvA5L5aMINblp",
+      "pageTitle": "Guidewire Home",
+      "mainHeading": null
+    },
+    {
+      "pageId": "page-3",
+      "pageUrl": "https://cc-dev-gwcpdev.cognizant.zeta1-andromeda.guidewire.net/ClaimCenter.do?selectedLanguage=en&selectedLocale=en-US",
+      "pageTitle": "[DEV mode - 50.14.0.3993] Guidewire ClaimCenter",
+      "mainHeading": null
+    }
+  ],
+  "elements": [
+    {
+      "tag": "",
+      "title": "",
+      "label": "",
+      "role": "",
+      "name": "",
+      "xpath": "/html[1]/body[1]/main[1]/div[3]/div[4]/div[2]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]",
+      "css": "div#appTabContent_Favorite > div.row.actFavHomePageRow > div.col-6.col-sm-6.col-md-4.appSectionCol > div.appColHolder > div.appTitleCol.verticalContent_middle",
+      "heading": "",
+      "page_heading": ""
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "action": "Click",
+      "navigation": "Click Guidewire Insurance",
+      "data": "",
+      "expected": "Element responds as expected.",
+      "locators": {
+        "playwright": "getByText('Guidewire Insurance')",
+        "stable": "div#appTabContent_Favorite > div.row.actFavHomePageRow > div.col-6.col-sm-6.col-md-4.appSectionCol > div.appColHolder > div.appTitleCol.verticalContent_middle",
+        "xpath": "/html[1]/body[1]/main[1]/div[3]/div[4]/div[2]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]",
+        "xpath_candidates": [
+          "/html[1]/body[1]/main[1]/div[3]/div[4]/div[2]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]"
+        ],
+        "raw_xpath": "/html[1]/body[1]/main[1]/div[3]/div[4]/div[2]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]",
+        "css": "div#appTabContent_Favorite > div.row.actFavHomePageRow > div.col-6.col-sm-6.col-md-4.appSectionCol > div.appColHolder > div.appTitleCol.verticalContent_middle",
+        "title": "",
+        "labels": "",
+        "role": "",
+        "name": "",
+        "tag": "",
+        "heading": "",
+        "page_heading": ""
+      }
+    }
+  ]
+}

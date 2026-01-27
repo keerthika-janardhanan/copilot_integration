@@ -1,0 +1,36 @@
+flowchart TD
+    Start([👤 User Starts Recording]) --> Record[📹 Intelligent Recorder<br/>Captures Actions & Context]
+    
+    Record --> AI[🤖 AI Script Generator<br/>Analyzes & Generates Code]
+    
+    AI --> Script[✅ Playwright Test Script<br/>Production Ready]
+    
+    Script --> Config[⚙️ Configure Execution<br/>Data Sets & Parallel Options]
+    
+    Config --> Execute[🚀 Parallel Execution Engine]
+    
+    Execute --> Browser1[🌐 Browser 1<br/>Ref ID: 10005]
+    Execute --> Browser2[🌐 Browser 2<br/>Ref ID: 10003]
+    Execute --> Browser3[🌐 Browser 3<br/>Ref ID: 10007]
+    
+    Browser1 --> Check{UI Change<br/>Detected?}
+    Browser2 --> Check
+    Browser3 --> Check
+    
+    Check -->|Yes| Heal[🔧 Self-Healing<br/>Auto-Fix Locators]
+    Check -->|No| Continue[▶️ Continue]
+    
+    Heal --> Continue
+    
+    Continue --> Results[📊 Execution Complete<br/>Pass/Fail Status]
+    
+    Results --> Dashboard[📈 Results Dashboard<br/>Reports, Screenshots, Traces]
+    
+    Dashboard --> End([✨ Done])
+    
+    style Start fill:#4CAF50,stroke:#2E7D32,color:#fff
+    style AI fill:#2196F3,stroke:#1565C0,color:#fff
+    style Execute fill:#FF9800,stroke:#E65100,color:#fff
+    style Heal fill:#9C27B0,stroke:#6A1B9A,color:#fff
+    style Dashboard fill:#4CAF50,stroke:#2E7D32,color:#fff
+    style End fill:#4CAF50,stroke:#2E7D32,color:#fff
