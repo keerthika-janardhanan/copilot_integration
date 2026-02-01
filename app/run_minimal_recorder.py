@@ -121,6 +121,7 @@ MINIMAL_INJECT = """
             timestamp: Date.now(),
             pageUrl: window.location.href,
             pageTitle: document.title,
+            visibleText: name || text.slice(0, 100) || '',
             element: {
                 html: target.outerHTML,
                 selector: {
@@ -171,6 +172,12 @@ def main():
     
     args = parser.parse_args()
     
+    # Normalize URL - add https:// if missing protocol
+    url = args.url
+    if not url.startswith(('http://', 'https://')):
+        url = f'https://{url}'
+        print(f"[URL Normalized] {args.url} -> {url}")
+    
     # Setup output directory
     output_root = Path(args.output_dir).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -185,14 +192,14 @@ def main():
         'metadataVersion': '2025.minimal',
         'flowId': session_name,
         'startTime': datetime.now().isoformat(),
-        'startUrl': args.url,
+        'startUrl': url,  # Use normalized URL
         'browser': args.browser,
         'actions': [],
         'pages': {}
     }
     
     print(f"[Minimal Recorder] Session: {session_name}")
-    print(f"[Minimal Recorder] URL: {args.url}")
+    print(f"[Minimal Recorder] URL: {url}")  # Show normalized URL
     print(f"[Minimal Recorder] Output: {output_path}")
     print(f"[Minimal Recorder] Press Ctrl+C to stop\n")
     
@@ -280,7 +287,16 @@ def main():
                 except Exception as e:
                     print(f"[Error] on_load: {e}")
             
+            def on_beforeunload():
+                """Poll actions one last time before navigation"""
+                try:
+                    print(f"[NAVIGATION] Capturing final actions before page unload...")
+                    poll_page_actions(page)
+                except Exception as e:
+                    print(f"[Error] on_beforeunload: {e}")
+            
             page.on('load', on_load)
+            page.on('framenavigated', lambda frame: poll_page_actions(page) if frame == page.main_frame else None)
             
         except Exception as e:
             print(f"[Error] setup_page: {e}")
@@ -297,14 +313,30 @@ def main():
         # Inject script in background - don't block
         def inject_async():
             try:
-                # Wait for page to be ready
-                page.wait_for_load_state('domcontentloaded', timeout=30000)
+                # Wait for page to be ready (shorter timeout, non-blocking)
+                page.wait_for_load_state('domcontentloaded', timeout=5000)
                 print(f"[TAB LOADED] {page_id}: {page.url}")
-                # Inject script
-                page.evaluate(MINIMAL_INJECT)
-                print(f"[TAB READY] {page_id}")
+                
+                # Inject script - with retry
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        page.evaluate(MINIMAL_INJECT)
+                        print(f"[TAB READY] {page_id}")
+                        break
+                    except Exception as inject_error:
+                        if attempt < max_retries - 1:
+                            time.sleep(0.2)
+                        else:
+                            print(f"[TAB WARNING] {page_id}: Script injection failed after {max_retries} attempts")
             except Exception as e:
                 print(f"[TAB ERROR] {page_id}: {e}")
+                # Try to inject anyway
+                try:
+                    page.evaluate(MINIMAL_INJECT)
+                    print(f"[TAB READY] {page_id} (fallback)")
+                except:
+                    print(f"[TAB FAILED] {page_id}: Could not inject recorder script")
         
         threading.Thread(target=inject_async, daemon=True).start()
     
@@ -314,12 +346,22 @@ def main():
     page = context.new_page()
     setup_page(page)
     
-    # Navigate
+    # Navigate with better error handling
     try:
-        page.goto(args.url, wait_until='domcontentloaded', timeout=30000)
-        print(f"[LOADED] {page.url}\n")
+        print(f"[LOADING] {url}...")
+        page.goto(url, wait_until='domcontentloaded', timeout=15000)
+        print(f"[LOADED] {page.url}")
+        
+        # Inject script on initial page
+        try:
+            page.evaluate(MINIMAL_INJECT)
+            print(f"[READY] Recorder active on {page.url}\n")
+        except Exception as inject_err:
+            print(f"[WARNING] Script injection failed: {inject_err}")
+            print("[INFO] Will retry injection on interaction...\n")
     except Exception as e:
-        print(f"[Error] Navigation failed: {e}")
+        print(f"[ERROR] Navigation failed: {e}")
+        print(f"[INFO] Recorder will try to work with current page state...\n")
     
     # Signal handler
     def signal_handler(sig, frame):
@@ -331,8 +373,9 @@ def main():
     except (AttributeError, ValueError):
         pass
     
-    # Main loop
+    # Main loop - 50ms polling for responsive capture
     start = time.time()
+    
     try:
         while not stop_event.is_set():
             # Poll all active pages for actions
@@ -361,7 +404,7 @@ def main():
                 page_id = payload.get('pageId', '')
                 print(f"[{action.upper()}] [{page_id}] {url}")
             
-            time.sleep(0.2)
+            time.sleep(0.1)  # 100ms polling interval - balanced for performance
             
             if args.timeout and (time.time() - start) >= args.timeout:
                 print(f"\n[Minimal Recorder] Timeout reached ({args.timeout}s)")
@@ -372,8 +415,8 @@ def main():
         print("\n[Minimal Recorder] Stopping...")
         stop_event.set()
     
-    # Final drain
-    time.sleep(0.3)
+    # Final drain - increased to ensure all actions captured
+    time.sleep(0.5)
     while action_queue:
         with queue_lock:
             if not action_queue:
@@ -391,8 +434,41 @@ def main():
     with write_lock:
         output_path.write_text(json.dumps(recording, indent=2), encoding='utf-8')
     
-    browser.close()
-    pw.stop()
+    # Proper cleanup to prevent greenlet errors
+    print("\n[Minimal Recorder] Cleaning up...")
+    try:
+        # Close all pages first
+        for p in context.pages:
+            try:
+                p.close()
+            except Exception:
+                pass
+        
+        # Close context
+        try:
+            context.close()
+        except Exception:
+            pass
+        
+        # Close browser
+        try:
+            browser.close()
+        except Exception:
+            pass
+        
+        # Stop Playwright
+        try:
+            pw.stop()
+        except Exception:
+            pass
+        
+        print("[Minimal Recorder] Cleanup complete")
+    except Exception as e:
+        print(f"[Warning] Cleanup error (can be ignored): {e}")
+    
+    print(f"\n[Minimal Recorder] Session saved to: {output_path}")
+    print(f"[Minimal Recorder] Total actions: {recording['totalActions']}")
+    print(f"[Minimal Recorder] Total pages: {recording['totalPages']}")
     
     print(f"\n[Minimal Recorder] Stopped")
     print(f"[Minimal Recorder] Captured {len(recording['actions'])} actions across {len(recording['pages'])} pages")

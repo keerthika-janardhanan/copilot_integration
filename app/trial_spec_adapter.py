@@ -420,7 +420,8 @@ def adapt_spec_content_for_trial(source: str, repo_root: Path) -> Tuple[str, boo
         if all_fills:
             logger.info(f"[TrialAdapter] Found {len(all_fills)} .fill() calls:")
             print(f"[TrialAdapter] Found {len(all_fills)} .fill() calls:")
-            for i, locator in enumerate(set(all_fills)[:10], 1):  # Show first 10 unique
+            unique_fills = list(set(all_fills))[:10]  # Convert set to list before slicing
+            for i, locator in enumerate(unique_fills, 1):  # Show first 10 unique
                 logger.info(f"  {i}. {locator}.fill()")
                 print(f"  {i}. {locator}.fill()")
         else:

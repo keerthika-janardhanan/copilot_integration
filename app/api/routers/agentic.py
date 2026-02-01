@@ -95,7 +95,7 @@ def _unskip_tests_for_trial(source: str) -> tuple[str, int]:
 @router.post("/preview", response_model=PreviewResponse)
 async def preview(req: PreviewRequest) -> PreviewResponse:
     try:
-        from ...agentic_script_agent import AgenticScriptAgent, FrameworkProfile
+        from ...generators.agentic_script_agent import AgenticScriptAgent, FrameworkProfile
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Import failure: {exc}") from exc
 
@@ -116,7 +116,7 @@ async def preview(req: PreviewRequest) -> PreviewResponse:
 @router.post("/refine", response_model=PreviewResponse)
 async def refine(req: RefineRequest) -> PreviewResponse:
     try:
-        from ...agentic_script_agent import AgenticScriptAgent, FrameworkProfile
+        from ...generators.agentic_script_agent import AgenticScriptAgent, FrameworkProfile
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Import failure: {exc}") from exc
     
@@ -136,7 +136,7 @@ async def refine(req: RefineRequest) -> PreviewResponse:
 @router.post("/payload", response_model=PayloadResponse)
 async def payload(req: PayloadRequest) -> PayloadResponse:
     try:
-        from ...agentic_script_agent import AgenticScriptAgent, FrameworkProfile
+        from ...generators.agentic_script_agent import AgenticScriptAgent, FrameworkProfile
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Import failure: {exc}") from exc
     
@@ -160,7 +160,7 @@ async def preview_stream(req: PreviewRequest) -> StreamingResponse:
       { "phase": "start" | "gather_context" | "context_ready" | "preview" | "done" | "error", ... }
     """
     try:
-        from ...agentic_script_agent import AgenticScriptAgent, FrameworkProfile
+        from ...generators.agentic_script_agent import AgenticScriptAgent, FrameworkProfile
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Import failure: {exc}") from exc
 
@@ -190,7 +190,7 @@ async def payload_stream(req: PayloadRequest) -> StreamingResponse:
     Event phases: start -> gather_context -> payload -> done (or error)
     """
     try:
-        from ...agentic_script_agent import AgenticScriptAgent, FrameworkProfile
+        from ...generators.agentic_script_agent import AgenticScriptAgent, FrameworkProfile
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Import failure: {exc}") from exc
 
@@ -227,7 +227,7 @@ class PersistRequest(BaseModel):
 @router.post("/persist", dependencies=[Depends(jwt_required)])
 async def persist(req: PersistRequest) -> dict:
     try:
-        from ...agentic_script_agent import AgenticScriptAgent, FrameworkProfile
+        from ...generators.agentic_script_agent import AgenticScriptAgent, FrameworkProfile
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Import failure: {exc}") from exc
     # Resolve provided frameworkRoot via shared resolver (supports remote URLs)
@@ -257,7 +257,7 @@ class PushRequest(BaseModel):
 @router.post("/push", dependencies=[Depends(jwt_required)])
 async def push(req: PushRequest) -> dict:
     try:
-        from ...agentic_script_agent import AgenticScriptAgent, FrameworkProfile
+        from ...generators.agentic_script_agent import AgenticScriptAgent, FrameworkProfile
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Import failure: {exc}") from exc
     # Resolve provided frameworkRoot via shared resolver (supports remote URLs)
@@ -711,7 +711,7 @@ async def keyword_inspect(req: KeywordInspectRequest) -> KeywordInspectResponse:
       4. Return both existing scripts and refined flows
     """
     try:
-        from ...agentic_script_agent import AgenticScriptAgent, FrameworkProfile
+        from ...generators.agentic_script_agent import AgenticScriptAgent, FrameworkProfile
         from ..framework_resolver import resolve_framework_root
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Import failure: {exc}") from exc
@@ -1305,3 +1305,4 @@ async def read_file_from_repo(filePath: str, frameworkRoot: str | None = None):
     except Exception as exc:
         logger.error(f"Error reading file {filePath}: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal error: {exc}")
+

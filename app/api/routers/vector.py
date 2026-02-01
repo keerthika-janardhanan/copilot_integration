@@ -29,8 +29,11 @@ class VectorQueryResponse(BaseModel):
 @router.post("/query", response_model=VectorQueryResponse)
 async def query(req: VectorQueryRequest) -> VectorQueryResponse:
     try:
-        from ...vector_db import VectorDBClient
+        from ...core.vector_db import VectorDBClient
     except Exception as exc:  # pragma: no cover
+        print(f"[Vector Query] Import error: {exc}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Import failure: {exc}") from exc
 
     client = VectorDBClient(path=os.getenv("VECTOR_DB_PATH", "./vector_store"))  # type: ignore[name-defined]
@@ -52,6 +55,9 @@ async def query(req: VectorQueryRequest) -> VectorQueryResponse:
             else:
                 raw = client.query(query_str, top_k=top_k)
     except Exception as exc:
+        print(f"[Vector Query] Query execution error: {exc}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Vector query failed: {exc}") from exc
 
     records: List[VectorRecord] = []
@@ -82,38 +88,40 @@ class FlowListResponse(BaseModel):
 
 @router.get("/flows", response_model=FlowListResponse)
 async def list_flows() -> FlowListResponse:
-    """List all refined recorder flows from the vector database."""
-    try:
-        from ...vector_db import VectorDBClient
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Import failure: {exc}") from exc
-
-    client = VectorDBClient(path=os.getenv("VECTOR_DB_PATH", "./vector_store"))
+    """List all refined recorder flows from the generated_flows directory (disk-based)."""
+    import json
+    from pathlib import Path
+    
+    # Load from disk instead of vector DB
+    generated_dir = Path(__file__).resolve().parent.parent.parent / "generated_flows"
+    
+    if not generated_dir.exists():
+        return FlowListResponse(flows=[])
+    
+    flows_map: Dict[str, Dict[str, Any]] = {}
     
     try:
-        # Query for all recorder_refined documents
-        raw = client.get_where(where={"type": "recorder_refined"}, limit=1000)
+        # Find all .refined.json files
+        for json_file in generated_dir.glob("*.refined.json"):
+            try:
+                data = json.loads(json_file.read_text(encoding="utf-8"))
+                flow_name = data.get("flow_name") or data.get("flow_id") or json_file.stem
+                flow_slug = flow_name.replace(" ", "-").lower()
+                steps = data.get("steps") or []
+                timestamp = data.get("generated_at") or data.get("timestamp")
+                
+                flows_map[flow_slug] = {
+                    "flowName": flow_name,
+                    "flowSlug": flow_slug,
+                    "timestamp": timestamp,
+                    "stepCount": len(steps)
+                }
+            except Exception as file_exc:
+                # Skip files that fail to parse
+                print(f"[Flows] Failed to parse {json_file.name}: {file_exc}")
+                continue
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Vector query failed: {exc}") from exc
-
-    # Group by flow_slug to get unique flows
-    flows_map: Dict[str, Dict[str, Any]] = {}
-    for item in raw or []:
-        metadata = item.get("metadata") or {}
-        flow_slug = metadata.get("flow_slug")
-        if not flow_slug:
-            continue
-        
-        if flow_slug not in flows_map:
-            flows_map[flow_slug] = {
-                "flowName": metadata.get("flow_name") or flow_slug,
-                "flowSlug": flow_slug,
-                "timestamp": metadata.get("timestamp") or metadata.get("ingested_at"),
-                "stepCount": 0
-            }
-        
-        # Count steps
-        flows_map[flow_slug]["stepCount"] += 1
+        raise HTTPException(status_code=500, detail=f"Failed to read flows directory: {exc}") from exc
 
     # Convert to list and sort by timestamp (newest first)
     flows = list(flows_map.values())

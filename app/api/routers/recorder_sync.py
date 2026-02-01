@@ -41,10 +41,14 @@ class RecorderStartResponse(BaseModel):
 
 def _build_recorder_command(session_id: str, url: str, flow_name: str, options: Dict[str, Any], session_dir: Path) -> list:
     """Build the command to launch the recorder."""
+    # Normalize URL - add https:// if missing protocol
+    if not url.startswith(('http://', 'https://')):
+        url = f'https://{url}'
+    
     cmd = [
         sys.executable,
         "-m",
-        "app.run_minimal_recorder",  # Changed to minimal recorder
+        "app.run_minimal_recorder",
         "--url",
         url,
         "--output-dir",

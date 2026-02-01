@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..recorder_auto_ingest import auto_refine_and_ingest
+from ..recorder.recorder_auto_ingest import auto_refine_and_ingest
 
 
 @dataclass

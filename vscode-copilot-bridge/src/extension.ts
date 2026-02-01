@@ -23,16 +23,21 @@ export function activate(context: vscode.ExtensionContext) {
             const allModels = await vscode.lm.selectChatModels();
             console.log(`[${timestamp}] Available models:`, allModels.map(m => `${m.id} (${m.family})`).join(', '));
             
-            // Try gpt-4o first (most common)
-            let models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+            // Try Claude Sonnet 4.5 first (preferred model) - match by ID
+            let models = allModels.filter(m => m.id === 'claude-sonnet-4.5' || m.family === 'claude-sonnet-4.5');
             
             if (!models || models.length === 0) {
-                console.log(`[${timestamp}] gpt-4o not found, trying gpt-4...`);
-                models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4' });
+                console.log(`[${timestamp}] Claude Sonnet 4.5 not found, trying claude-sonnet-4...`);
+                models = allModels.filter(m => m.id === 'claude-sonnet-4' || m.family === 'claude-sonnet-4');
             }
             
             if (!models || models.length === 0) {
-                console.log(`[${timestamp}] gpt-4 not found, trying gpt-3.5-turbo...`);
+                console.log(`[${timestamp}] Claude Sonnet not found, trying gpt-5...`);
+                models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-5' });
+            }
+            
+            if (!models || models.length === 0) {
+                console.log(`[${timestamp}] gpt-5 not found, trying gpt-3.5-turbo...`);
                 models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-3.5-turbo' });
             }
             

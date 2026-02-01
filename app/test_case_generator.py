@@ -79,14 +79,26 @@ class TestCaseGenerator:
             "assumptions",
         ]
         self.cached_flow_steps: List[dict] = []
-        # LLM client (Azure OpenAI)
-        self.llm = llm or AzureChatOpenAI(
-            openai_api_version=os.getenv("OPENAI_API_VERSION"),
-            azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT", "GPT-4o"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-            api_key=os.getenv("AZURE_OPENAI_KEY"),
-            temperature=0.2,
-        )
+        # LLM client - use Copilot bridge if available, otherwise Azure OpenAI
+        if llm:
+            self.llm = llm
+        else:
+            copilot_url = os.getenv("COPILOT_BRIDGE_URL")
+            if copilot_url:
+                # Use Copilot bridge
+                from .llm_client_copilot import CopilotClient
+                self.llm = CopilotClient(temperature=0.2)
+                logger.info("TestCaseGenerator: Using Copilot bridge at %s", copilot_url)
+            else:
+                # Fall back to Azure OpenAI
+                self.llm = AzureChatOpenAI(
+                    openai_api_version=os.getenv("OPENAI_API_VERSION"),
+                    azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT", "GPT-4o"),
+                    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                    api_key=os.getenv("AZURE_OPENAI_KEY"),
+                    temperature=0.2,
+                )
+                logger.info("TestCaseGenerator: Using Azure OpenAI")
 
     def generate_test_cases(self, story: str, per_step_negatives: int = 1, per_step_edges: int = 1, max_steps_for_variants: int = 8, llm_only: bool = False):
         try:

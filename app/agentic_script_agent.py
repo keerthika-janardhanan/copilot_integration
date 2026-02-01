@@ -67,7 +67,147 @@ def _to_camel_case(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
     if not cleaned:
         return ""
-    return re.sub(r"[^a-z0-9]+(.)?", lambda m: m.group(1).upper() if m.group(1) else "", cleaned)
+    # Remove leading numbers to ensure valid identifier
+    cleaned = re.sub(r"^[0-9]+", "", cleaned).strip()
+    if not cleaned:
+        return "Generated"
+    # Convert to camelCase
+    result = re.sub(r"[^a-z0-9]+(.)?", lambda m: m.group(1).upper() if m.group(1) else "", cleaned)
+    # Ensure result doesn't start with a number (safety check)
+    if result and result[0].isdigit():
+        result = "Test" + result
+    return result or "Generated"
+
+
+def _urls_match(url1: str, url2: str) -> bool:
+    """
+    Compare two URLs ignoring query parameters and fragments.
+    
+    Args:
+        url1: First URL to compare
+        url2: Second URL to compare
+        
+    Returns:
+        True if the base URLs match (scheme + netloc + path)
+    """
+    from urllib.parse import urlparse
+    
+    if not url1 or not url2:
+        return False
+    
+    parsed1 = urlparse(url1)
+    parsed2 = urlparse(url2)
+    
+    # Compare scheme, netloc, and path (ignore query and fragment)
+    return (parsed1.scheme == parsed2.scheme and 
+            parsed1.netloc == parsed2.netloc and 
+            parsed1.path == parsed2.path)
+
+
+def _group_steps_by_page_title(steps: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Group steps by their pageTitle for page-based file organization.
+    
+    Args:
+        steps: List of step dictionaries from recorder metadata
+        
+    Returns:
+        Dictionary mapping page titles to lists of steps
+    """
+    grouped = {}
+    for step in steps:
+        page_title = step.get('pageTitle') or step.get('page_title') or 'Unknown'
+        if page_title not in grouped:
+            grouped[page_title] = []
+        grouped[page_title].append(step)
+    return grouped
+
+
+def _scan_existing_pages(framework: "FrameworkProfile") -> List[str]:
+    """
+    Scan the framework's pages directory for existing page files.
+    
+    Args:
+        framework: The framework profile containing directory paths
+        
+    Returns:
+        List of existing page file names (without extension)
+    """
+    if not framework.pages_dir or not framework.pages_dir.exists():
+        return []
+    
+    existing_pages = []
+    for file_path in framework.pages_dir.glob("*.ts"):
+        # Extract filename without extension
+        page_name = file_path.stem
+        existing_pages.append(page_name)
+    
+    return existing_pages
+
+
+def _scan_existing_locators(framework: "FrameworkProfile") -> List[str]:
+    """
+    Scan the framework's locators directory for existing locator files.
+    
+    Args:
+        framework: The framework profile containing directory paths
+        
+    Returns:
+        List of existing locator file names (without extension)
+    """
+    if not framework.locators_dir or not framework.locators_dir.exists():
+        return []
+    
+    existing_locators = []
+    for file_path in framework.locators_dir.glob("*.ts"):
+        # Extract filename without extension
+        locator_name = file_path.stem
+        existing_locators.append(locator_name)
+    
+    return existing_locators
+
+
+def _get_login_home_urls(framework: "FrameworkProfile") -> Dict[str, str]:
+    """
+    Extract URLs from existing login and home page files to enable smart reuse.
+    
+    Args:
+        framework: The framework profile containing directory paths
+        
+    Returns:
+        Dictionary with 'login' and 'home' keys mapping to their URLs (if found)
+    """
+    urls = {}
+    
+    if not framework.pages_dir or not framework.pages_dir.exists():
+        return urls
+    
+    # Check for login page
+    login_path = framework.pages_dir / "login.page.ts"
+    if login_path.exists():
+        try:
+            content = login_path.read_text(encoding='utf-8')
+            # Look for URL patterns like: page.goto('https://...')
+            import re
+            match = re.search(r"page\.goto\(['\"]([^'\"]+)['\"]", content)
+            if match:
+                urls['login'] = match.group(1)
+        except Exception as e:
+            logger.warning(f"Failed to read login page URL: {e}")
+    
+    # Check for home page
+    home_path = framework.pages_dir / "home.page.ts"
+    if home_path.exists():
+        try:
+            content = home_path.read_text(encoding='utf-8')
+            import re
+            match = re.search(r"page\.goto\(['\"]([^'\"]+)['\"]", content)
+            if match:
+                urls['home'] = match.group(1)
+        except Exception as e:
+            logger.warning(f"Failed to read home page URL: {e}")
+    
+    return urls
 
 
 def _normalize_selector(selector: str) -> str:
@@ -499,12 +639,32 @@ class AgenticScriptAgent:
             enriched_text = self._format_steps_for_prompt(vector_steps)
 
         scaffold_snippet = self._fetch_scaffold_snippet(scenario)
+        
+        # Extract page titles and URLs for page-based file organization
+        page_titles = set()
+        page_url_map = {}  # Map page title to URL for login/home detection
+        start_url = ""
+        
+        for idx, step in enumerate(vector_steps or []):
+            page_title = step.get('pageTitle') or step.get('page_title')
+            if page_title:
+                page_titles.add(page_title)
+                page_url = step.get('pageUrl') or step.get('page_url') or step.get('original_url')
+                if page_url and page_title not in page_url_map:
+                    page_url_map[page_title] = page_url
+            if idx == 0:
+                start_url = step.get('original_url') or step.get('pageUrl') or step.get('page_url') or ""
 
         return {
             "enriched_steps": enriched_text,
             "existing_script_excerpt": existing_excerpt,
             "scaffold_snippet": scaffold_snippet,
             "vector_steps": vector_steps,
+            "page_titles": list(page_titles),
+            "page_url_map": page_url_map,
+            "start_url": start_url,
+            "vector_flow_name": vector_flow_name,
+            "vector_flow_slug": vector_flow_slug,
             "artifacts": {
                 "existing_script": existing_script,
                 "recorder_flow": recorder_flow,
@@ -528,13 +688,12 @@ class AgenticScriptAgent:
                 "INSUFFICIENT_CONTEXT: No recorder or vector-backed steps found. "
                 "Please record the scenario or ingest relevant docs before generating a preview."
             )
-        # By default, return the full refined steps list as the editable preview.
-        # Set USE_LLM_PREVIEW=true to enable LLM-generated previews instead.
+        # LLM-generated previews enabled by default
         try:
-            use_llm = str(os.getenv("USE_LLM_PREVIEW", "")).strip().lower() in {"1", "true", "yes", "on"}
-            logger.info(f"USE_LLM_PREVIEW env var: {os.getenv('USE_LLM_PREVIEW')}, use_llm={use_llm}")
+            use_llm = str(os.getenv("USE_LLM_PREVIEW", "true")).strip().lower() in {"1", "true", "yes", "on"}
+            logger.info(f"USE_LLM_PREVIEW env var: {os.getenv('USE_LLM_PREVIEW', 'true')}, use_llm={use_llm}")
         except Exception:
-            use_llm = False
+            use_llm = True
         if vector_steps and not use_llm:
             logger.info("Returning vector steps without LLM (USE_LLM_PREVIEW=false)")
             return self._format_steps_for_prompt(vector_steps)
@@ -1290,9 +1449,9 @@ class AgenticScriptAgent:
                 "Please ingest the refined flow or record the scenario again."
             )
         
-        # Check if LLM-based payload generation is enabled
-        use_llm_payload = str(os.getenv("USE_LLM_PAYLOAD", "")).strip().lower() in {"1", "true", "yes", "on"}
-        logger.info(f"USE_LLM_PAYLOAD env var: {os.getenv('USE_LLM_PAYLOAD')}, use_llm_payload={use_llm_payload}")
+        # Check if LLM-based payload generation is enabled (default: true)
+        use_llm_payload = str(os.getenv("USE_LLM_PAYLOAD", "true")).strip().lower() in {"1", "true", "yes", "on"}
+        logger.info(f"USE_LLM_PAYLOAD env var: {os.getenv('USE_LLM_PAYLOAD', 'true')}, use_llm_payload={use_llm_payload}")
         
         if use_llm_payload:
             # LLM-based payload generation
@@ -1389,6 +1548,311 @@ class AgenticScriptAgent:
             vector_steps = context.get("vector_steps") or []
             return self._build_deterministic_payload(scenario, framework, vector_steps, keep_signatures=None)
 
+    @staticmethod
+    def _generate_enhanced_xpath(element: Dict[str, Any], step: Dict[str, Any]) -> str:
+        """
+        Generate enhanced XPath selectors combining multiple attributes for resilience.
+        
+        Args:
+            element: Element dictionary containing tag, id, className, text, etc.
+            step: Step dictionary containing action, navigation, and locators
+            
+        Returns:
+            Enhanced XPath string with multiple attribute conditions
+        """
+        # Extract element attributes
+        tag_name = element.get('tagName', '').lower() or 'input'
+        elem_id = element.get('id', '').strip()
+        class_name = element.get('className', '').strip()
+        text_content = element.get('textContent', '').strip()
+        name_attr = element.get('name', '').strip()
+        placeholder = element.get('placeholder', '').strip()
+        
+        # Get navigation/action context for additional hints
+        navigation = step.get('navigation', '').strip()
+        action = step.get('action', '').strip()
+        
+        # Build XPath conditions
+        conditions = []
+        
+        # Add ID condition if available (most reliable)
+        if elem_id:
+            conditions.append(f"@id='{elem_id}'")
+        
+        # Add name attribute if available
+        if name_attr:
+            conditions.append(f"@name='{name_attr}'")
+        
+        # Add placeholder for input fields
+        if placeholder and tag_name in ['input', 'textarea']:
+            conditions.append(f"@placeholder='{placeholder}'")
+        
+        # Add class if available (less reliable, so combine with others)
+        if class_name:
+            # Use contains for classes to handle multiple class names
+            conditions.append(f"contains(@class, '{class_name.split()[0]}')")
+        
+        # Add text content for buttons/links
+        if text_content and tag_name in ['button', 'a', 'span', 'div']:
+            conditions.append(f"text()='{text_content}'")
+        
+        # If we have multiple conditions, combine them
+        if len(conditions) >= 2:
+            xpath = f"//{tag_name}[{' and '.join(conditions)}]"
+        elif len(conditions) == 1:
+            xpath = f"//{tag_name}[{conditions[0]}]"
+        else:
+            # Fallback: use tag name only (least reliable)
+            xpath = f"//{tag_name}"
+        
+        return xpath
+
+    def _build_page_based_payload(
+        self,
+        scenario: str,
+        framework: FrameworkProfile,
+        vector_steps: List[Dict[str, Any]],
+        keep_signatures: Optional[Set[str]] = None,
+    ) -> Dict[str, List[Dict[str, str]]]:
+        """
+        Generate payload with page-based file organization.
+        Groups steps by pageTitle and generates separate files per page.
+        """
+        # Group steps by page title
+        grouped_pages = _group_steps_by_page_title(vector_steps)
+        
+        # Get existing pages and login/home URLs for smart reuse
+        existing_pages = _scan_existing_pages(framework)
+        existing_locators = _scan_existing_locators(framework)
+        login_home_urls = _get_login_home_urls(framework)
+        
+        # Storage for generated files
+        all_locator_files = []
+        all_page_files = []
+        page_imports = []  # For test file
+        
+        root = framework.root
+        def resolve_relative(target: Path) -> str:
+            return str(target.relative_to(root)).replace('\\', '/')
+        
+        # Process each page
+        for page_title, page_steps in grouped_pages.items():
+            page_slug = _slugify(page_title)
+            page_class_name = f"{_to_camel_case(page_slug).capitalize()}Page"
+            
+            # Get page URL for login/home detection
+            page_url = ""
+            for step in page_steps:
+                page_url = step.get('pageUrl') or step.get('original_url') or page_url
+                if page_url:
+                    break
+            
+            # Check if this is login or home page
+            is_login = 'login' in login_home_urls and _urls_match(page_url, login_home_urls['login'])
+            is_home = 'home' in login_home_urls and _urls_match(page_url, login_home_urls['home'])
+            
+            if is_login or is_home:
+                # Skip generation, use existing page
+                existing_class = "LoginPage" if is_login else "HomePage"
+                existing_file = f"login.page" if is_login else "home.page"
+                page_imports.append({
+                    'className': existing_class,
+                    'fileName': existing_file,
+                    'isExisting': True,
+                    'pageTitle': page_title
+                })
+                logger.info(f"Reusing existing {existing_class} for page: {page_title}")
+                continue
+            
+            # Generate locators and page files for this page
+            locators_path = (framework.locators_dir or root / 'locators') / f"{page_slug}.ts"
+            page_filename = f"{page_class_name}.ts"
+            page_path = (framework.pages_dir or root / 'pages') / page_filename
+            
+            # Generate locators content
+            locators_content = self._generate_locators_for_page(page_steps, page_slug)
+            
+            # Generate page class content
+            page_content = self._generate_page_class_for_page(
+                page_steps, page_class_name, locators_path, page_path, framework
+            )
+            
+            # Add to collections
+            all_locator_files.append({'path': resolve_relative(locators_path), 'content': locators_content})
+            all_page_files.append({'path': resolve_relative(page_path), 'content': page_content})
+            
+            page_imports.append({
+                'className': page_class_name,
+                'fileName': page_slug,
+                'isExisting': False,
+                'pageTitle': page_title,
+                'varName': page_class_name[0].lower() + page_class_name[1:] if page_class_name else 'page'
+            })
+        
+        # Generate single test file that orchestrates all pages
+        test_slug = _slugify(scenario)
+        test_path = (framework.tests_dir or root / 'tests') / f"{test_slug}.spec.ts"
+        test_content = self._generate_multi_page_test(scenario, page_imports, grouped_pages, test_path, framework)
+        
+        return {
+            'locators': all_locator_files,
+            'pages': all_page_files,
+            'tests': [{'path': resolve_relative(test_path), 'content': test_content}],
+            'testDataMapping': []  # TODO: Extract from pages
+        }
+
+    def _generate_locators_for_page(
+        self, page_steps: List[Dict[str, Any]], page_slug: str
+    ) -> str:
+        """Generate locators file content for a single page."""
+        selector_to_key: Dict[str, str] = {}
+        used_keys: set[str] = set()
+        entries: List[Tuple[str, str]] = []
+        
+        for index, step in enumerate(page_steps):
+            locators = step.get('locators') or {}
+            selector = _normalize_selector(
+                locators.get('css')
+                or locators.get('playwright')
+                or locators.get('stable')
+                or locators.get('xpath')
+                or locators.get('raw_xpath')
+                or locators.get('selector')
+                or ''
+            )
+            
+            if not selector:
+                element = step.get('element') or {}
+                selector = _normalize_selector(
+                    element.get('css')
+                    or element.get('playwright')
+                    or element.get('stable')
+                    or element.get('xpath')
+                    or element.get('raw_xpath')
+                )
+            
+            if not selector:
+                continue
+            
+            # Skip duplicates
+            if selector in selector_to_key:
+                continue
+            
+            # Generate key name
+            base_name = (
+                locators.get('name')
+                or locators.get('title')
+                or locators.get('labels')
+                or step.get('navigation')
+                or step.get('action')
+                or f'step{index + 1}'
+            )
+            base_key = _to_camel_case(base_name) or f'step{index + 1}'
+            key = base_key
+            suffix = 2
+            while key in used_keys:
+                key = f"{base_key}{suffix}"
+                suffix += 1
+            
+            selector_to_key[selector] = key
+            used_keys.add(key)
+            entries.append((key, selector))
+        
+        # Generate locators file
+        locators_lines = ['const locators = {'] + [
+            f"  {key}: {json.dumps(selector)}," for key, selector in entries
+        ] + ['};', '', 'export default locators;']
+        
+        return "\n".join(locators_lines) + os.linesep
+    
+    def _generate_page_class_for_page(
+        self,
+        page_steps: List[Dict[str, Any]],
+        page_class_name: str,
+        locators_path: Path,
+        page_path: Path,
+        framework: FrameworkProfile
+    ) -> str:
+        """Generate page class file content for a single page."""
+        # This is a simplified version - will expand based on step actions
+        page_var = page_class_name[:1].lower() + page_class_name[1:] if page_class_name else 'pageObject'
+        
+        page_lines: List[str] = [
+            "import { Page, Locator } from '@playwright/test';",
+            f'import locators from "{_relative_import(page_path, locators_path)}";',
+            '',
+            f'class {page_class_name} {{',
+            '  page: Page;',
+            '',
+            '  constructor(page: Page) {',
+            '    this.page = page;',
+            '  }',
+            '}',
+            '',
+            f'export default {page_class_name};'
+        ]
+        
+        return "\n".join(page_lines) + os.linesep
+    
+    def _generate_multi_page_test(
+        self,
+        scenario: str,
+        page_imports: List[Dict[str, Any]],
+        grouped_pages: Dict[str, List[Dict[str, Any]]],
+        test_path: Path,
+        framework: FrameworkProfile
+    ) -> str:
+        """Generate test file that orchestrates multiple pages."""
+        scenario_literal = json.dumps(scenario)
+        
+        spec_lines = [
+            'import { test } from "../testSetup";',
+        ]
+        
+        # Add imports for all pages
+        for page_info in page_imports:
+            class_name = page_info['className']
+            file_name = page_info['fileName']
+            if page_info['isExisting']:
+                # Import from pages directory
+                spec_lines.append(f'import {class_name} from "../pages/{file_name}";')
+            else:
+                # Import generated page
+                page_path = framework.pages_dir / f"{class_name}.ts"
+                rel_import = _relative_import(test_path, page_path)
+                spec_lines.append(f'import {class_name} from "{rel_import}";')
+        
+        spec_lines.extend([
+            '',
+            f'test.describe({scenario_literal}, () => {{',
+        ])
+        
+        # Declare page object variables
+        for page_info in page_imports:
+            class_name = page_info['className']
+            var_name = page_info.get('varName', class_name[:1].lower() + class_name[1:])
+            spec_lines.append(f'  let {var_name}: {class_name};')
+        
+        spec_lines.extend([
+            '',
+            f'  test({scenario_literal}, async ({{ page }}) => {{',
+        ])
+        
+        # Initialize page objects
+        for page_info in page_imports:
+            class_name = page_info['className']
+            var_name = page_info.get('varName', class_name[:1].lower() + class_name[1:])
+            spec_lines.append(f'    {var_name} = new {class_name}(page);')
+        
+        spec_lines.extend([
+            '',
+            '    // TODO: Add test steps',
+            '  });',
+            '});'
+        ])
+        
+        return "\n".join(spec_lines) + os.linesep
+
     def _build_deterministic_payload(
         self,
         scenario: str,
@@ -1396,6 +1860,18 @@ class AgenticScriptAgent:
         vector_steps: List[Dict[str, Any]],
         keep_signatures: Optional[Set[str]] = None,
     ) -> Dict[str, List[Dict[str, str]]]:
+        # Check if we have multiple pages - if so, use page-based generation
+        page_titles = set()
+        for step in vector_steps:
+            page_title = step.get('pageTitle') or step.get('page_title')
+            if page_title:
+                page_titles.add(page_title)
+        
+        if len(page_titles) > 1:
+            logger.info(f"Multiple pages detected ({len(page_titles)}), using page-based generation")
+            return self._build_page_based_payload(scenario, framework, vector_steps, keep_signatures)
+        
+        # Fall back to original single-file generation
         slug = _slugify(scenario)
         root = framework.root
 
@@ -1741,7 +2217,7 @@ class AgenticScriptAgent:
 
         scenario_literal = json.dumps(scenario)
         spec_lines = [
-            'import { test } from "./testSetup.ts";',
+            'import { test } from "../testSetup";',
             f'import PageObject from "{_relative_import(test_path, page_path)}";',
         ]
         if login_page_file:

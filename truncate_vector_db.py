@@ -2,7 +2,7 @@
 Quick command to truncate (delete all documents from) vector DB.
 Usage: python truncate_vector_db.py
 """
-from app.vector_db import VectorDBClient
+from app.core.vector_db import VectorDBClient
 import os
 
 vdb = VectorDBClient(path=os.getenv("VECTOR_DB_PATH", "./vector_store"))

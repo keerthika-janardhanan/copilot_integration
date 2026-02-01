@@ -8,8 +8,8 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from ..test_case_generator import TestCaseGenerator, map_llm_to_template
-from ..vector_db import VectorDBClient
+from ..generators.test_case_generator import TestCaseGenerator, map_llm_to_template
+from ..core.vector_db import VectorDBClient
 
 
 class TestCaseGenerationError(RuntimeError):

@@ -10,13 +10,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from uuid import uuid4
 
-from celery import Task
-
-from .celery_app import celery_app
-from . import job_store
+from .core import job_store
 from .api.events import recorder_events
-from .ingest import ingest_document, ingest_jira, ingest_web_site
-from .vector_db import VectorDBClient
+from .ingestion.ingest import ingest_document, ingest_jira, ingest_web_site
+from .core.vector_db import VectorDBClient
 
 RECORDINGS_DIR = Path(os.getenv("RECORDER_OUTPUT_DIR", "recordings")).resolve()
 
@@ -109,7 +106,7 @@ def _build_recorder_command(
     cmd: List[str] = [
         sys.executable,
         "-m",
-        "app.run_minimal_recorder",  # Changed to minimal recorder
+        "app.recorder.run_playwright_recorder_v2",  # Use v2 recorder
         "--url",
         payload["url"],
         "--output-dir",
@@ -171,23 +168,7 @@ def _run_recorder_subprocess(
     return process.returncode, (stdout or "").strip(), (stderr or "").strip()
 
 
-class JobTask(Task):
-    abstract = True
-
-    def on_failure(self, exc: BaseException, task_id: str, args: Tuple[Any, ...], kwargs: Dict[str, Any], einfo) -> None:
-        job_id = args[0] if args else kwargs.get("job_id")
-        if job_id:
-            job_store.update_job(job_id, "failed", error=str(exc))
-
-    def on_success(self, retval: Any, task_id: str, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> None:
-        job_id = args[0] if args else kwargs.get("job_id")
-        if job_id:
-            result_payload = retval if isinstance(retval, dict) else {"result": retval}
-            job_store.update_job(job_id, "completed", result=result_payload)
-
-
-@celery_app.task(base=JobTask, bind=True)
-def launch_recorder_session_task(self, job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def launch_recorder_session_task(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     job_store.update_job(job_id, "running")
     session_id = payload["sessionId"]
     output_root = _prepare_output_root()
@@ -306,8 +287,7 @@ def launch_recorder_session_task(self, job_id: str, payload: Dict[str, Any]) -> 
         _release_recorder_session(session_id)
 
 
-@celery_app.task(base=JobTask, bind=True)
-def stop_recorder_session_task(self, job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def stop_recorder_session_task(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     job_store.update_job(job_id, "running")
     session_id = payload["sessionId"]
     recorder_events.publish_from_thread(
@@ -383,22 +363,19 @@ def stop_recorder_session_task(self, job_id: str, payload: Dict[str, Any]) -> Di
         raise RuntimeError(f"Unable to terminate recorder session '{session_id}': {exc}") from exc
 
 
-@celery_app.task(base=JobTask, bind=True)
-def ingest_jira_task(self, job_id: str, jql: str) -> Dict[str, Any]:
+def ingest_jira_task(job_id: str, jql: str) -> Dict[str, Any]:
     job_store.update_job(job_id, "running")
     results = ingest_jira(jql)
     return {"ingested": len(results)}
 
 
-@celery_app.task(base=JobTask, bind=True)
-def ingest_website_task(self, job_id: str, url: str, max_depth: int) -> Dict[str, Any]:
+def ingest_website_task(job_id: str, url: str, max_depth: int) -> Dict[str, Any]:
     job_store.update_job(job_id, "running")
     results = ingest_web_site(url, max_depth)
     return {"ingested": len(results)}
 
 
-@celery_app.task(base=JobTask, bind=True)
-def ingest_documents_task(self, job_id: str, paths: List[str]) -> Dict[str, Any]:
+def ingest_documents_task(job_id: str, paths: List[str]) -> Dict[str, Any]:
     job_store.update_job(job_id, "running")
     count = 0
     for file_path in paths:
@@ -407,63 +384,80 @@ def ingest_documents_task(self, job_id: str, paths: List[str]) -> Dict[str, Any]
     return {"ingested": count}
 
 
-@celery_app.task(base=JobTask, bind=True)
-def vector_delete_by_id_task(self, job_id: str, doc_id: str) -> Dict[str, Any]:
-    job_store.update_job(job_id, "running")
-    client = VectorDBClient()
-    client.delete_document(doc_id)
-    return {"deleted": doc_id}
+def vector_delete_by_id_task(job_id: str, doc_id: str) -> Dict[str, Any]:
+    try:
+        job_store.update_job(job_id, "running")
+        client = VectorDBClient()
+        client.delete_document(doc_id)
+        result = {"deleted": doc_id}
+        job_store.update_job(job_id, "completed", result=result)
+        print(f"[Vector Delete] Successfully deleted document: {doc_id}")
+        return result
+    except Exception as e:
+        error_msg = f"Failed to delete document {doc_id}: {str(e)}"
+        print(f"[Vector Delete] {error_msg}")
+        job_store.update_job(job_id, "failed", error=error_msg)
+        raise
 
 
-@celery_app.task(base=JobTask, bind=True)
-def vector_delete_by_source_task(self, job_id: str, source: str) -> Dict[str, Any]:
-    job_store.update_job(job_id, "running")
-    client = VectorDBClient()
-    client.delete_by_source(source)
-    return {"deletedSource": source}
+def vector_delete_by_source_task(job_id: str, source: str) -> Dict[str, Any]:
+    try:
+        job_store.update_job(job_id, "running")
+        client = VectorDBClient()
+        client.delete_by_source(source)
+        result = {"deletedSource": source}
+        job_store.update_job(job_id, "completed", result=result)
+        print(f"[Vector Delete] Successfully deleted source: {source}")
+        return result
+    except Exception as e:
+        error_msg = f"Failed to delete source {source}: {str(e)}"
+        print(f"[Vector Delete] {error_msg}")
+        job_store.update_job(job_id, "failed", error=error_msg)
+        raise
 
 
 def enqueue_recorder_launch(payload: Dict[str, Any]) -> Tuple[str, str]:
     session_id = payload.get("sessionId") or uuid4().hex
     payload = {**payload, "sessionId": session_id}
     job_id = job_store.create_job("recorder.launch", payload)
-    launch_recorder_session_task.delay(job_id, payload)
+    # Run in background thread
+    threading.Thread(target=launch_recorder_session_task, args=(job_id, payload), daemon=True).start()
     return job_id, session_id
 
 
 def enqueue_recorder_stop(session_id: str) -> str:
     payload = {"sessionId": session_id}
     job_id = job_store.create_job("recorder.stop", payload)
-    stop_recorder_session_task.delay(job_id, payload)
+    threading.Thread(target=stop_recorder_session_task, args=(job_id, payload), daemon=True).start()
     return job_id
 
 
 def enqueue_ingest_jira(jql: str) -> str:
     job_id = job_store.create_job("ingest.jira", {"jql": jql})
-    ingest_jira_task.delay(job_id, jql)
+    threading.Thread(target=ingest_jira_task, args=(job_id, jql), daemon=True).start()
     return job_id
 
 
 def enqueue_ingest_website(url: str, max_depth: int) -> str:
     job_id = job_store.create_job("ingest.website", {"url": url, "maxDepth": max_depth})
-    ingest_website_task.delay(job_id, url, max_depth)
+    threading.Thread(target=ingest_website_task, args=(job_id, url, max_depth), daemon=True).start()
     return job_id
 
 
 def enqueue_ingest_documents(paths: Iterable[str]) -> str:
     paths = list(paths)
     job_id = job_store.create_job("ingest.documents", {"paths": paths})
-    ingest_documents_task.delay(job_id, paths)
+    threading.Thread(target=ingest_documents_task, args=(job_id, paths), daemon=True).start()
     return job_id
 
 
 def enqueue_vector_delete_by_id(doc_id: str) -> str:
     job_id = job_store.create_job("vector.delete_id", {"docId": doc_id})
-    vector_delete_by_id_task.delay(job_id, doc_id)
+    threading.Thread(target=vector_delete_by_id_task, args=(job_id, doc_id), daemon=True).start()
     return job_id
 
 
 def enqueue_vector_delete_by_source(source: str) -> str:
     job_id = job_store.create_job("vector.delete_source", {"source": source})
-    vector_delete_by_source_task.delay(job_id, source)
+    threading.Thread(target=vector_delete_by_source_task, args=(job_id, source), daemon=True).start()
     return job_id

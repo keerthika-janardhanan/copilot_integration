@@ -769,8 +769,19 @@ export function HorizontalFlowLayout({ initialStep = 'home' }: HorizontalFlowLay
       // Store test data mapping for UI display
       setTestDataMapping(data.testDataMapping || []);
       
+      console.log('=== PAYLOAD DEBUG ===');
+      console.log('Data structure:', {
+        locators: data.locators?.length || 0,
+        pages: data.pages?.length || 0,
+        tests: data.tests?.length || 0,
+        testDataMapping: data.testDataMapping?.length || 0
+      });
       console.log('All files:', allFiles);
+      allFiles.forEach((f: any, idx: number) => {
+        console.log(`  File ${idx}: path="${f.path}", contentLength=${f.content?.length || 0}`);
+      });
       console.log('Test data mapping:', data.testDataMapping);
+      console.log('=====================');
       
       // Find the test file
       const testFile = allFiles.find((f: any) => 
@@ -3502,9 +3513,8 @@ ${refinedFlowSteps.map((step: any, idx: number) => {
                 
                 <div className="bg-gradient-to-br from-green-900/50 to-emerald-700/30 backdrop-blur-2xl border-2 border-green-400/40 rounded-3xl p-16 shadow-2xl">
                   
-                  {/* Test Data Mapping Section - Expanded */}
-                  {testDataMapping && testDataMapping.length > 0 && (
-                    <div className="mb-10 bg-gradient-to-br from-blue-900/30 to-cyan-800/20 border-2 border-blue-400/30 rounded-2xl p-8">
+                  {/* Test Data Mapping Section - Always visible */}
+                  <div className="mb-10 bg-gradient-to-br from-blue-900/30 to-cyan-800/20 border-2 border-blue-400/30 rounded-2xl p-8">
                       <div className="flex items-center justify-between mb-6">
                         <h4 className="text-2xl font-bold text-white flex items-center gap-3">
                           <span className="text-3xl">📊</span>
@@ -3666,7 +3676,6 @@ ${refinedFlowSteps.map((step: any, idx: number) => {
                         </div>
                       </div>
                     </div>
-                  )}
                   
                   {/* Generated Files - Tabbed View */}
                   <div className="mb-10">
@@ -3680,6 +3689,13 @@ ${refinedFlowSteps.map((step: any, idx: number) => {
                     <div className="bg-black/40 rounded-xl border border-green-400/30 overflow-hidden">
                       {/* Tab Headers */}
                       <div className="flex border-b border-green-400/30 bg-black/30">
+                        {(() => {
+                          const locatorCount = payloadFiles.filter((f: any) => f.path.includes('locators/')).length;
+                          const pageCount = payloadFiles.filter((f: any) => f.path.includes('pages/')).length;
+                          const testCount = payloadFiles.filter((f: any) => f.path.includes('tests/') || f.path.endsWith('.spec.ts')).length;
+                          console.log(`Tab counts: locators=${locatorCount}, pages=${pageCount}, tests=${testCount}`);
+                          return null;
+                        })()}
                         {payloadFiles.filter((f: any) => f.path.includes('locators/')).length > 0 && (
                           <button
                             onClick={() => setActiveCodeTab('locators')}

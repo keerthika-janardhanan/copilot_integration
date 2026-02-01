@@ -35,7 +35,8 @@ try:
 except Exception:
     load_dotenv = None  # type: ignore
 
-from .. import job_store
+from ..core import job_store
+from ..core import hashstore
 from ..services.refined_flow_service import RecorderSessionResult, finalize_recorder_session
 from ..services.test_case_service import (
     TestCaseGenerationError,
@@ -138,7 +139,9 @@ class IngestWebsiteRequest(BaseModel):
     maxDepth: int = Field(2, ge=1, le=5)
 
 
+# Initialize databases on startup
 job_store.init_job_store()
+hashstore.init_db()
 
 def _load_env_files() -> None:
     """Load environment variables from .env files.
