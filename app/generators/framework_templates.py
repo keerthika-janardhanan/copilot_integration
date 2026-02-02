@@ -183,7 +183,11 @@ class FrameworkTemplate:
                     "dataType": "string"
                 })
         
-        test_data_fields = ',\n        '.join(json.dumps(field, indent=8)[8:] for field in fields)
+        # Convert fields to properly formatted JSON array elements
+        if fields:
+            test_data_fields = ',\n        '.join(json.dumps(field) for field in fields)
+        else:
+            test_data_fields = ''
         
         return template.replace('{{FLOW_NAME}}', flow_name) \
                       .replace('{{GENERATED_DATE}}', datetime.now().strftime('%Y-%m-%d %H:%M:%S')) \

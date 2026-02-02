@@ -39,9 +39,7 @@ Key reliability adjustments (Oct/Nov 2025):
  - Wrap LLM invocations; return explicit sentinel messages when unavailable.
 """
 
-from .orchestrator import TestScriptOrchestrator
-from .git_utils import push_to_git
-from .vector_db import VectorDBClient
+from .core.git_utils import push_to_git
 
 
 def _strip_code_fences(text: str) -> str:
@@ -425,8 +423,6 @@ class AgenticScriptAgent:
     def __init__(self):
         # Lazy-initialize LLM to avoid failures in endpoints that don't require it (e.g., keyword-inspect)
         self.llm = None  # type: ignore[assignment]
-        self.orchestrator = TestScriptOrchestrator()
-        self.vector_db = VectorDBClient()
         # Initialize prompt templates eagerly so attributes are always present
         self.preview_prompt = PromptTemplate(
             input_variables=[
@@ -616,36 +612,22 @@ class AgenticScriptAgent:
         return self.llm
 
     def gather_context(self, scenario: str) -> Dict[str, Any]:
-        try:
-            existing_script, recorder_flow, ui_crawl, test_case, structure, enriched_steps = (
-                self.orchestrator.generate_script(scenario)
-            )
-        except Exception as exc:
-            # Don't let context gathering break endpoints that can work with vector/FS only
-            logger.warning("orchestrator.generate_script failed for scenario '%s': %s", scenario, exc)
-            existing_script, recorder_flow, ui_crawl, test_case, structure, enriched_steps = (
-                None, None, None, None, None, None
-            )
-
-        enriched_text = json.dumps(enriched_steps, indent=2) if enriched_steps else ""
-        existing_excerpt = ""
-        if existing_script and existing_script.get("content"):
-            existing_excerpt = str(existing_script["content"])[:1200]
-
-        vector_steps = self._collect_vector_flow_steps(scenario)
-        vector_flow_name = vector_steps[0].get("flow_name") if vector_steps else ""
-        vector_flow_slug = vector_steps[0].get("flow_slug") if vector_steps else ""
-        if vector_steps:
-            enriched_text = self._format_steps_for_prompt(vector_steps)
-
-        scaffold_snippet = self._fetch_scaffold_snippet(scenario)
+        # Load refined flow steps directly from disk (no vector DB)
+        name_variants, slug_variants = self._scenario_variants(scenario)
+        flow_steps = self._load_refined_flow_from_disk(slug_variants, name_variants)
+        
+        flow_name = flow_steps[0].get("flow_name") if flow_steps else ""
+        flow_slug = flow_steps[0].get("flow_slug") if flow_steps else ""
+        
+        # Format steps for the LLM prompt
+        enriched_text = self._format_steps_for_prompt(flow_steps) if flow_steps else ""
         
         # Extract page titles and URLs for page-based file organization
         page_titles = set()
         page_url_map = {}  # Map page title to URL for login/home detection
         start_url = ""
         
-        for idx, step in enumerate(vector_steps or []):
+        for idx, step in enumerate(flow_steps or []):
             page_title = step.get('pageTitle') or step.get('page_title')
             if page_title:
                 page_titles.add(page_title)
@@ -657,26 +639,26 @@ class AgenticScriptAgent:
 
         return {
             "enriched_steps": enriched_text,
-            "existing_script_excerpt": existing_excerpt,
-            "scaffold_snippet": scaffold_snippet,
-            "vector_steps": vector_steps,
+            "existing_script_excerpt": "",
+            "scaffold_snippet": "",
+            "vector_steps": flow_steps,
             "page_titles": list(page_titles),
             "page_url_map": page_url_map,
             "start_url": start_url,
-            "vector_flow_name": vector_flow_name,
-            "vector_flow_slug": vector_flow_slug,
+            "vector_flow_name": flow_name,
+            "vector_flow_slug": flow_slug,
             "artifacts": {
-                "existing_script": existing_script,
-                "recorder_flow": recorder_flow,
-                "ui_crawl": ui_crawl,
-                "test_case": test_case,
-                "structure": structure,
+                "existing_script": None,
+                "recorder_flow": None,
+                "ui_crawl": None,
+                "test_case": None,
+                "structure": None,
             },
-            "flow_available": bool(recorder_flow) or bool(vector_steps),
+            "flow_available": bool(flow_steps),
             "vector_flow": {
-                "flow_name": vector_flow_name,
-                "flow_slug": vector_flow_slug,
-            } if vector_flow_name or vector_flow_slug else None,
+                "flow_name": flow_name,
+                "flow_slug": flow_slug,
+            } if flow_name or flow_slug else None,
         }
 
     def generate_preview(self, scenario: str, framework: FrameworkProfile, context: Dict[str, Any]) -> str:
@@ -998,7 +980,77 @@ class AgenticScriptAgent:
                 except (TypeError, ValueError):
                     step_no = idx
                 action = str(step.get("action") or "").strip()
+                
+                # Extract navigation from element if not already set
                 navigation = str(step.get("navigation") or "").strip()
+                if not navigation:
+                    # Try to get from visibleText or element selector
+                    visible_text = str(step.get("visibleText") or "").strip()
+                    if visible_text:
+                        navigation = visible_text
+                    else:
+                        element = step.get("element") or {}
+                        if isinstance(element, dict):
+                            selector = element.get("selector", {})
+                            playwright_sel = selector.get("playwright", {})
+                            # Extract from getByLabel, getByPlaceholder, getByText, etc.
+                            for key, value in playwright_sel.items():
+                                if value and isinstance(value, str):
+                                    match = re.search(r"['\"]([^'\"]+)['\"]", value)
+                                    if match:
+                                        navigation = match.group(1)
+                                        break
+                            
+                            # Fallback: Parse HTML element to extract meaningful context
+                            if not navigation:
+                                html = element.get("html", "")
+                                if html and isinstance(html, str):
+                                    # Try to extract from common attributes (ordered by priority)
+                                    # 1. value attribute (for buttons and inputs)
+                                    value_match = re.search(r'value=["\']([^"\']+)["\']', html)
+                                    if value_match and value_match.group(1).strip():
+                                        navigation = value_match.group(1).strip()
+                                    
+                                    # 2. aria-label attribute
+                                    if not navigation:
+                                        aria_match = re.search(r'aria-label=["\']([^"\']+)["\']', html)
+                                        if aria_match and aria_match.group(1).strip():
+                                            navigation = aria_match.group(1).strip()
+                                    
+                                    # 3. placeholder attribute
+                                    if not navigation:
+                                        placeholder_match = re.search(r'placeholder=["\']([^"\']+)["\']', html)
+                                        if placeholder_match and placeholder_match.group(1).strip():
+                                            navigation = placeholder_match.group(1).strip()
+                                    
+                                    # 4. name attribute (for form fields like "username")
+                                    if not navigation:
+                                        name_match = re.search(r'name=["\']([^"\']+)["\']', html)
+                                        if name_match and name_match.group(1).strip():
+                                            name_val = name_match.group(1).strip()
+                                            # Make it more readable: "username" -> "username field"
+                                            if name_val and not name_val.endswith('field'):
+                                                navigation = f"{name_val} field"
+                                            else:
+                                                navigation = name_val
+                                    
+                                    # 5. data-type attribute (like "save")
+                                    if not navigation:
+                                        data_type_match = re.search(r'data-type=["\']([^"\']+)["\']', html)
+                                        if data_type_match and data_type_match.group(1).strip():
+                                            navigation = data_type_match.group(1).strip()
+                                    
+                                    # 6. type attribute as last resort (like "submit", "button")
+                                    if not navigation:
+                                        type_match = re.search(r'type=["\']([^"\']+)["\']', html)
+                                        if type_match and type_match.group(1).strip():
+                                            type_val = type_match.group(1).strip()
+                                            # Only use meaningful types
+                                            if type_val in ["submit", "button", "reset"]:
+                                                navigation = f"{type_val} button"
+                                            elif type_val in ["text", "email", "password", "search", "tel", "url"]:
+                                                navigation = f"{type_val} input"
+                
                 data_val = str(step.get("data") or "").strip()
                 expected = str(step.get("expected") or "").strip()
                 locators = step.get("locators") or {}
@@ -1026,93 +1078,9 @@ class AgenticScriptAgent:
                 return sorted(formatted, key=lambda item: item["step"])
         return []
 
-    def _collect_vector_flow_steps(self, scenario: str, top_k: int = 256) -> List[Dict[str, str]]:
+    def _collect_flow_steps(self, scenario: str) -> List[Dict[str, str]]:
+        """Load refined flow steps directly from disk (no vector DB)."""
         name_variants, slug_variants = self._scenario_variants(scenario)
-        raw_specs: List[Dict[str, Any]] = []
-
-        def _add_spec(query: str, where: Dict[str, Any]) -> None:
-            if not query:
-                return
-            raw_specs.append({"query": query, "where": where})
-
-        for slug in slug_variants:
-            _add_spec(scenario, {"type": "recorder_refined", "flow_slug": slug})
-            _add_spec(slug.replace("-", " "), {"type": "recorder_refined", "flow_slug": slug})
-
-        for name in name_variants:
-            slug = _slugify(name)
-            _add_spec(name, {"type": "recorder_refined", "flow_slug": slug})
-            _add_spec(name, {"type": "recorder_refined", "flow_name": name})
-
-        fallback_queries = [scenario] + name_variants
-        for query in fallback_queries:
-            _add_spec(query, {"type": "recorder_refined"})
-
-        specs: List[Dict[str, Any]] = []
-        seen_spec: set[Tuple[str, str]] = set()
-        for spec in raw_specs:
-            key = (spec["query"], json.dumps(spec["where"], sort_keys=True))
-            if key in seen_spec:
-                continue
-            seen_spec.add(key)
-            specs.append(spec)
-
-        slug_hits: Counter[str] = Counter()
-        candidate_set = {slug.lower() for slug in slug_variants}
-        selected_slug: Optional[str] = None
-        flow_name_map: Dict[str, str] = {}
-
-        for spec in specs:
-            try:
-                results = self.vector_db.query_where(spec["query"], spec["where"], top_k=top_k)
-            except Exception:
-                results = []
-            for entry in results or []:
-                meta = entry.get("metadata") or {}
-                content = self._parse_content_snapshot(entry.get("content") or "")
-                payload = content.get("payload") if isinstance(content, dict) else {}
-                record_kind = (meta.get("record_kind") or (payload or {}).get("record_kind") or "").lower()
-                if record_kind == "element":
-                    continue
-                flow_slug = (
-                    meta.get("flow_slug")
-                    or (payload or {}).get("flow_slug")
-                    or meta.get("flowSlug")
-                    or (payload or {}).get("flowSlug")
-                    or ""
-                )
-                flow_slug = _slugify(flow_slug) if flow_slug else ""
-                if not flow_slug:
-                    continue
-                slug_hits[flow_slug] += 1
-                flow_name = meta.get("flow_name") or (payload or {}).get("flow") or ""
-                flow_name_map.setdefault(flow_slug, flow_name)
-                if flow_slug.lower() in candidate_set:
-                    selected_slug = flow_slug
-            if selected_slug:
-                break
-
-        if not selected_slug:
-            selected_slug = self._select_best_slug(slug_hits, slug_variants)
-
-        if selected_slug:
-            try:
-                docs = self.vector_db.list_where(
-                    where={"type": "recorder_refined", "flow_slug": selected_slug},
-                    limit=top_k,
-                )
-            except Exception:
-                docs = []
-            steps = self._steps_from_vector_docs(docs, default_flow_slug=selected_slug)
-            if steps:
-                flow_name = flow_name_map.get(selected_slug) or steps[0].get("flow_name") or ""
-                # Ensure flow metadata is present on each step for downstream consumers.
-                for step in steps:
-                    step.setdefault("flow_slug", selected_slug)
-                    if flow_name and not step.get("flow_name"):
-                        step["flow_name"] = flow_name
-                return steps
-
         return self._load_refined_flow_from_disk(slug_variants, name_variants)
 
     @staticmethod
@@ -1163,40 +1131,8 @@ class AgenticScriptAgent:
         return "\n".join(lines if limit is None else lines[: max(1, limit)])
 
     def _fetch_scaffold_snippet(self, scenario: str, limit: int = 3, max_chars: int = 1500) -> str:
-        try:
-            results = self.vector_db.query_where(
-                scenario,
-                where={"type": "script_scaffold"},
-                top_k=limit,
-            )
-        except Exception:
-            results = []
-
-        snippets: List[str] = []
-        for entry in results or []:
-            metadata = entry.get("metadata") or {}
-            content_obj = self._parse_content_snapshot(entry.get("content", ""))
-            path = metadata.get("file_path") or ""
-            code = ""
-            if isinstance(content_obj, dict):
-                path = content_obj.get("filePath") or content_obj.get("path") or path
-                code = content_obj.get("content") or content_obj.get("body") or ""
-            elif isinstance(content_obj, list):
-                for item in content_obj:
-                    if isinstance(item, dict) and not code:
-                        path = item.get("filePath") or path
-                        code = item.get("content") or item.get("body") or ""
-            if not code:
-                code = str(entry.get("content") or "")
-            snippet = ""
-            if path:
-                snippet += f"// {path}\n"
-            snippet += code.strip()
-            if snippet:
-                snippets.append(snippet[:max_chars])
-            if sum(len(s) for s in snippets) >= max_chars:
-                break
-        return "\n\n".join(snippets)[:max_chars]
+        # Scaffold snippets not needed without vector DB - return empty
+        return ""
 
     @staticmethod
     def _parse_content_snapshot(content: str) -> Optional[Dict[str, Any]]:
@@ -1285,45 +1221,8 @@ class AgenticScriptAgent:
     def find_existing_framework_assets(
         self, scenario: str, framework: FrameworkProfile, top_k: int = 8
     ) -> List[Dict[str, Any]]:
-        try:
-            results = self.vector_db.query(scenario, top_k=top_k)
-        except Exception as exc:
-            logger.warning("vector_db.query failed for scenario '%s': %s", scenario, exc)
-            results = []
-        assets: List[Dict[str, Any]] = []
-        min_score = 6  # threshold to avoid unrelated matches
-        scenario_tokens = self._tokenize(scenario)
-        scenario_terms = {tok for tok in scenario_tokens if tok}
-
-        def _path_matches(path_obj: Path) -> bool:
-            lowered = str(path_obj).lower()
-            return any(term in lowered for term in scenario_terms)
-
-        for entry in results:
-            metadata = entry.get("metadata", {}) or {}
-            meta_type = str(metadata.get("type", "")) + str(metadata.get("artifact_type", ""))
-            if not any(token in meta_type.lower() for token in ["script", "scaffold", "locator", "page", "test"]):
-                continue
-            content_str = entry.get("content", "")
-            path = self._locate_framework_file(framework, metadata, content_str)
-            if path and path.exists():
-                if scenario_terms and not _path_matches(path):
-                    continue
-                try:
-                    file_content = path.read_text(encoding="utf-8", errors="ignore")
-                except Exception:
-                    file_content = ""
-                score = self._compute_relevance_score(path, file_content, scenario_tokens)
-                if score >= min_score:
-                    assets.append({
-                        "path": path,
-                        "metadata": {**metadata, "relevance_score": score, "source": "vector+repo"},
-                        "id": entry.get("id"),
-                    })
-        # Fallback: direct repo scan if vector search found nothing
-        if not assets:
-            assets = self._filesystem_search_assets(framework, scenario, max_results=top_k)
-        return assets
+        # Use filesystem search directly (no vector DB)
+        return self._filesystem_search_assets(framework, scenario, max_results=top_k)
 
     def _filesystem_search_assets(self, framework: FrameworkProfile, scenario: str, max_results: int = 8) -> List[Dict[str, Any]]:
         """Search the framework repo for likely matching files when vector DB has no hits.

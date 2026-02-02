@@ -326,10 +326,18 @@ def _filter_auth_steps(actions: List[Dict[str, Any]], original_url: Optional[str
 
 
 def _deduplicate_actions(actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove consecutive duplicate actions and checkbox input/change events."""
+    """Remove consecutive duplicate actions and redundant event sequences.
+    
+    Rules:
+    1. click → input (same element): Remove click, keep input
+    2. input → change (same element): Keep input, remove change
+    3. Skip checkbox input/change on same element
+    4. Remove exact duplicates (same element + action)
+    """
     if not actions:
         return []
     
+    import re
     deduplicated = [actions[0]]
     
     for action in actions[1:]:
@@ -341,6 +349,11 @@ def _deduplicate_actions(actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         action_type = action.get("action", "")
         html = elem.get("html") or ""
         
+        # Extract name/id for reliable element matching
+        name_match = re.search(r'name="([^"]+)"', html) if html else None
+        id_match = re.search(r'id="([^"]+)"', html) if html else None
+        element_id = name_match.group(1) if name_match else (id_match.group(1) if id_match else "")
+        
         # Get previous action details
         prev = deduplicated[-1]
         prev_elem = prev.get("element") or {}
@@ -350,16 +363,36 @@ def _deduplicate_actions(actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         prev_action_type = prev.get("action", "")
         prev_html = prev_elem.get("html") or ""
         
-        # Check if current element is a checkbox
-        is_checkbox = 'type="checkbox"' in html or 'type="radio"' in html
-        prev_is_checkbox = 'type="checkbox"' in prev_html or 'type="radio"' in prev_html
+        # Extract previous name/id
+        prev_name_match = re.search(r'name="([^"]+)"', prev_html) if prev_html else None
+        prev_id_match = re.search(r'id="([^"]+)"', prev_html) if prev_html else None
+        prev_element_id = prev_name_match.group(1) if prev_name_match else (prev_id_match.group(1) if prev_id_match else "")
         
-        # Skip input/change actions for checkboxes if on same element as previous action
-        if is_checkbox and action_type in ["input", "change"] and css == prev_css:
+        # Check if elements match (CSS, XPath, or name/id)
+        elements_match = (
+            (css and css == prev_css) or 
+            (xpath and xpath == prev_xpath) or
+            (element_id and element_id == prev_element_id)
+        )
+        
+        # Check if checkbox/radio
+        is_checkbox = 'type="checkbox"' in html or 'type="radio"' in html
+        
+        # RULE 1: click → input (same element) = Remove click, keep input
+        if elements_match and prev_action_type == "click" and action_type == "input":
+            deduplicated[-1] = action  # Replace click with input
             continue
         
-        # Skip if BOTH the element AND action type are the same as previous
-        if (css, xpath, action_type) == (prev_css, prev_xpath, prev_action_type):
+        # RULE 2: input → change (same element) = Keep input, remove change
+        if elements_match and prev_action_type == "input" and action_type == "change":
+            continue  # Skip change, keep input
+        
+        # RULE 3: Skip checkbox/radio input/change on same element
+        if is_checkbox and action_type in ["input", "change"] and elements_match:
+            continue
+        
+        # RULE 4: Skip exact duplicates (same element + action)
+        if elements_match and action_type == prev_action_type:
             continue
             
         deduplicated.append(action)

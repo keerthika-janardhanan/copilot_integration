@@ -828,6 +828,25 @@ class RecorderSession:
             except Exception:
                 self._artifacts["trace"] = str(trace_path)
         self._persist()
+        
+        # Automatically refine the metadata to create refined.json
+        try:
+            from ..ingestion.ingest_refined_flow import transform_metadata_to_refined
+            print(f"\n📝 Auto-refining recorded flow: {self.flow_name}")
+            refined_data = transform_metadata_to_refined(str(self.metadata_path))
+            
+            # Save refined.json to app/generated_flows/
+            output_dir = Path(__file__).resolve().parent.parent / "generated_flows"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / f"{self.flow_id}-{self.flow_id}.refined.json"
+            
+            import json
+            output_path.write_text(json.dumps(refined_data, indent=2, ensure_ascii=False), encoding="utf-8")
+            print(f"✅ Refined flow saved: {output_path}")
+            print(f"   Steps: {len(refined_data.get('steps', []))} (after deduplication)")
+        except Exception as exc:
+            print(f"⚠️  Auto-refinement failed (metadata.json still saved): {exc}")
+        
         return self.metadata_path
 
 

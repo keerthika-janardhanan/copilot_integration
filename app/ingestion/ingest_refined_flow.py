@@ -52,7 +52,12 @@ def _shorten(value: str, limit: int = 800) -> str:
 
 
 def remove_consecutive_duplicates(actions):
-    """Remove consecutive duplicate actions and filter checkbox input/change events."""
+    """Remove consecutive duplicate actions and filter checkbox input/change events.
+    
+    For consecutive actions on the same element (by CSS):
+    - Prefer 'input' action if multiple actions exist
+    - If all are click/change, keep only one
+    """
     if not actions:
         return []
     
@@ -70,18 +75,38 @@ def remove_consecutive_duplicates(actions):
             i += 1
             continue
         
-        # Look ahead for consecutive same element and action
+        # Collect all consecutive actions with the same CSS selector
+        consecutive_group = [current]
         j = i + 1
         while j < len(actions):
             next_action = actions[j]
             next_css = next_action.get('element', {}).get('selector', {}).get('css')
+            next_html = next_action.get('element', {}).get('html', '')
+            next_is_checkbox = 'type="checkbox"' in next_html or 'type="radio"' in next_html
             
-            if next_css == css and next_action['action'] == current['action']:
+            # Skip checkbox input/change in lookahead too
+            if next_is_checkbox and next_action['action'] in ['input', 'change']:
+                j += 1
+                continue
+            
+            if next_css == css:
+                consecutive_group.append(next_action)
                 j += 1
             else:
                 break
         
-        deduplicated.append(current)
+        # Smart selection from consecutive group
+        if len(consecutive_group) > 1:
+            # Prefer 'input' action if it exists
+            input_actions = [a for a in consecutive_group if a['action'] == 'input']
+            if input_actions:
+                deduplicated.append(input_actions[0])
+            else:
+                # All are click/change, keep only the first one
+                deduplicated.append(consecutive_group[0])
+        else:
+            deduplicated.append(current)
+        
         i = j
     
     # Add step numbers
@@ -180,16 +205,44 @@ def ingest_refined_file(file_path: str, flow_name: str | None = None) -> dict:
             skipped += 1
             continue
 
+        # Extract element details from the 'element' field (new refined format)
+        element = step.get("element", {}) if isinstance(step, dict) else {}
+        selector = element.get("selector", {})
+        playwright_sel = selector.get("playwright", {})
+        
+        # Extract meaningful field labels/placeholders from Playwright selectors
+        visible_text = str(step.get("visibleText") or "").strip()
+        page_title = str(step.get("pageTitle") or "").strip()
+        
+        # Populate navigation from element context if not already set
+        if not navigation and visible_text:
+            navigation = visible_text
+        elif not navigation and playwright_sel:
+            # Extract from getByLabel, getByPlaceholder, etc.
+            for key, value in playwright_sel.items():
+                if value and isinstance(value, str):
+                    # Extract text from getByLabel('text') patterns
+                    match = re.search(r"['\"]([^'\"]+)['\"]", value)
+                    if match:
+                        navigation = match.group(1)
+                        break
+        
+        # Backward compatibility: also check old locators format
         loc = step.get("locators") if isinstance(step, dict) else {}
-        page_heading = str((loc or {}).get("page_heading") or "").strip()
-        heading = str((loc or {}).get("heading") or "").strip()
-        xpath = str((loc or {}).get("raw_xpath") or (loc or {}).get("xpath") or "").strip()
-        title = str((loc or {}).get("title") or "").strip()
+        page_heading = str((loc or {}).get("page_heading") or page_title or "").strip()
+        heading = str((loc or {}).get("heading") or visible_text or "").strip()
+        xpath = str(
+            (loc or {}).get("raw_xpath") or 
+            (loc or {}).get("xpath") or 
+            selector.get("xpath") or 
+            ""
+        ).strip()
+        title = str((loc or {}).get("title") or visible_text or "").strip()
         labels = str((loc or {}).get("labels") or "").strip()
 
-        # Attach a small element summary if we can resolve it
+        # Attach element info for the payload
         el_key = xpath or title or labels
-        el_info = el_index.get(el_key, {})
+        el_info = el_index.get(el_key, {}) or element
 
         content_payload = {
             "flow": flow_name,
@@ -205,7 +258,7 @@ def ingest_refined_file(file_path: str, flow_name: str | None = None) -> dict:
             "xpath": xpath,
             "title": title,
             "labels": labels,
-            "locators": step.get("locators"),
+            "locators": step.get("locators") or {"selector": selector, "playwright": playwright_sel},
             "element": el_info,
         }
 

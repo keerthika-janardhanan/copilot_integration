@@ -398,7 +398,7 @@ class AgenticScriptAgent:
                 "FLOW NAME: {flow_name}\n"
                 "START URL: {start_url}\n\n"
                 "═══════════════════════════════════════════════════════════════════════════════\n"
-                "RECORDED STEPS FROM USER:\n"
+                "RECORDED STEPS FROM USER (with [Page Title] prefix):\n"
                 "═══════════════════════════════════════════════════════════════════════════════\n"
                 "{recorded_steps}\n\n"
                 "═══════════════════════════════════════════════════════════════════════════════\n"
@@ -408,54 +408,83 @@ class AgenticScriptAgent:
                 "═══════════════════════════════════════════════════════════════════════════════\n"
                 "CRITICAL REQUIREMENTS - MUST FOLLOW EXACTLY:\n"
                 "═══════════════════════════════════════════════════════════════════════════════\n\n"
-                "1. FILE STRUCTURE:\n"
-                "   - Locator file: locators/{flow_name}.ts\n"
-                "   - Page file: pages/{flow_name}Page.ts (camelCase class name)\n"
-                "   - Test file: tests/{flow_name}.spec.ts\n\n"
-                "2. PAGE CLASS MUST INCLUDE:\n"
-                "   - import HelperClass from \"../util/methods.utility.ts\";\n"
-                "   - helper: HelperClass property and initialization\n"
-                "   - ALL locator properties declared and initialized\n"
-                "   - coerceValue, normaliseDataKey, resolveDataValue helper methods\n"
-                "   - Setter methods (setSupplier, setNumber, setAmount, etc.)\n"
-                "   - applyData(formData, keys?, index?) method with duplicate field support\n\n"
-                "3. TEST FILE MUST INCLUDE:\n"
-                "   - Complete Excel data handling (testmanager.xlsx + data sheets)\n"
-                "   - Step 0: Navigation to start URL\n"
-                "   - Each action wrapped in namedStep with screenshot\n"
-                "   - Use applyData for inputs: await pagename.applyData(dataRow, [\"FieldName\"], index)\n"
-                "   - Dynamic dropdown selection: getDataValue('Field', 'default')\n\n"
-                "4. DATA-DRIVEN PATTERN (CRITICAL):\n"
-                "   ✅ CORRECT: await page.applyData(dataRow, [\"Supplier\"])\n"
-                "   ✅ CORRECT: const val = getDataValue('Supplier', 'default'); await page.getByText(val).click()\n"
-                "   ❌ WRONG: await page.supplier.fill('Allied Manufacturing')\n"
-                "   ❌ WRONG: await page.alliedManufacturing10001.click()\n\n"
-                "5. OUTPUT FORMAT:\n"
-                "   Return ONLY valid JSON (no markdown, no code fences):\n"
+                "1. PAGE-BASED FILE STRUCTURE (MANDATORY):\n"
+                "   ⚠️ DETECT UNIQUE PAGE TITLES FROM STEPS (e.g., [OneCognizant], [guidewire-hub - Sign In], [Guidewire Home])\n"
+                "   ⚠️ CREATE SEPARATE FILES PER PAGE:\n"
+                "   • locators/<PageTitle>.ts (e.g., locators/OneCognizant.ts)\n"
+                "   • pages/<PageTitle>.pages.ts (e.g., pages/OneCognizant.pages.ts)\n"
+                "   ⚠️ ONE TEST FILE: tests/{flow_name}.spec.ts\n"
+                "   ⚠️ Test file MUST import ALL page classes and stitch them together in sequential steps\n\n"
+                "2. LOCATOR STRATEGY (ALWAYS 2+ ATTRIBUTES - MANDATORY):\n"
+                "   Priority 1: visible_text + playwright_property → page.getByRole('button', {{ name: 'Submit' }}).and(page.locator('[data-test=\"submit-btn\"]'))\n"
+                "   Priority 2: visible_text + css → page.getByText('Submit').and(page.locator('button.submit-btn'))\n"
+                "   Priority 3: playwright + css/xpath → page.getByRole('textbox', {{ name: 'Email' }}).and(page.locator('input[name=\"email\"]'))\n"
+                "   Priority 4: css + html_attributes → page.locator('input[type=\"text\"][name=\"email\"][placeholder=\"Enter email\"]')\n"
+                "   Priority 5: xpath + html → page.locator('xpath=//input[@type=\"text\" and @name=\"email\" and @placeholder=\"Enter email\"]')\n"
+                "   ❌ NEVER use single-attribute selectors: page.locator('#email') ← WRONG\n"
+                "   ✅ ALWAYS combine 2+ attributes for resilience\n\n"
+                "3. PAGE CLASS STRUCTURE (MATCH REFERENCE EXACTLY):\n"
+                "   • import {{ Page, Locator }} from '@playwright/test';\n"
+                "   • import HelperClass from \"../util/methods.utility.ts\";\n"
+                "   • import locators from \"../locators/<PageTitle>.ts\";\n"
+                "   • Properties: page: Page, helper: HelperClass, ALL element Locators\n"
+                "   • Constructor: Initialize helper, map ALL locators with page.locator(locators.elementName)\n"
+                "   • Include: coerceValue, normaliseDataKey, resolveDataValue, applyData methods\n"
+                "   • Setter methods for each input field (setSupplier, setNumber, setAmount, etc.)\n"
+                "   • applyData method with fallbackValues and index support for duplicate fields\n\n"
+                "4. TEST FILE STRUCTURE (MATCH REFERENCE EXACTLY):\n"
+                "   • import {{ test }} from \"./testSetup.ts\";\n"
+                "   • import ALL page classes: import OneCognizantPage from \"../pages/OneCognizant.pages.ts\";\n"
+                "   • import LoginPage and HomePage\n"
+                "   • import {{ getTestToRun, shouldRun, readExcelData }} from \"../util/csvFileManipulation.ts\";\n"
+                "   • import {{ attachScreenshot, namedStep }} from \"../util/screenshot.ts\";\n"
+                "   • test.beforeAll: executionList = getTestToRun(...)\n"
+                "   • Declare ALL page instances: let oneCognizantPage: OneCognizantPage;\n"
+                "   • Initialize in test: oneCognizantPage = new OneCognizantPage(page);\n"
+                "   • Data handling: Read from Excel with ReferenceID, DatasheetName, IDName\n"
+                "   • Each step: await namedStep(\"Step X - Action\", page, testinfo, async () => {{ ... }})\n"
+                "   • Screenshot after EVERY step: attachScreenshot(\"Step X\", testinfo, screenshot)\n\n"
+                "5. DATA MAPPING (CRITICAL):\n"
+                "   ✅ CORRECT: await createinvoicepayablespage.applyData(dataRow, [\"Supplier\"], 0)\n"
+                "   ✅ CORRECT: const val = getDataValue('BusinessUnit', 'FU01'); await page.getByText(val).click()\n"
+                "   ✅ CORRECT: await page.applyData(dataRow, [\"Amount\"], 1) // for 2nd Amount field\n"
+                "   ❌ WRONG: await page.supplier.fill('Allied Manufacturing') // hardcoded value\n"
+                "   ❌ WRONG: await page.alliedManufacturing10001.click() // hardcoded element\n\n"
+                "6. OUTPUT FORMAT (STRICT JSON):\n"
+                "   Return ONLY valid JSON (no markdown fences, no explanations):\n"
                 "   {{\n"
-                "     \"locators/{flow_name}.ts\": \"<complete TypeScript code>\",\n"
-                "     \"pages/{flow_name}Page.ts\": \"<complete TypeScript code>\",\n"
+                "     \"locators/<PageTitle1>.ts\": \"<complete TypeScript code>\",\n"
+                "     \"locators/<PageTitle2>.ts\": \"<complete TypeScript code>\",\n"
+                "     \"pages/<PageTitle1>.pages.ts\": \"<complete TypeScript code>\",\n"
+                "     \"pages/<PageTitle2>.pages.ts\": \"<complete TypeScript code>\",\n"
                 "     \"tests/{flow_name}.spec.ts\": \"<complete TypeScript code>\"\n"
                 "   }}\n\n"
-                "Generate complete, production-ready code. NO placeholders. NO TODOs.\n"
+                "⚠️ MUST GENERATE:\n"
+                "• Separate locator file per unique page title\n"
+                "• Separate page file per unique page title\n"
+                "• One test file that imports and uses ALL page classes\n"
+                "• Every locator MUST have 2+ attributes (NEVER single attribute)\n"
+                "• Test data MUST use applyData() or getDataValue() (NEVER hardcoded values)\n\n"
+                "Generate complete, production-ready code. NO placeholders. NO TODOs. NO comments like '// Add more locators'.\n"
             ),
         )
     def _ensure_llm(self):
         """Instantiate the LLM only when needed (preview/refine).
-        Uses Copilot bridge if COPILOT_BRIDGE_URL is set, otherwise falls back to Azure OpenAI.
+        Defaults to Copilot endpoints. Falls back to Azure OpenAI only if Copilot is not available.
         """
         if self.llm is None:
-            # Check if Copilot bridge is configured
-            copilot_url = os.getenv("COPILOT_BRIDGE_URL")
-            if copilot_url:
-                # Use Copilot bridge
+            # Default to Copilot bridge (http://localhost:3030 if not set)
+            copilot_url = os.getenv("COPILOT_BRIDGE_URL", "http://localhost:3030")
+            try:
+                # Always try Copilot first
                 from ..core.llm_client_copilot import CopilotClient
                 self.llm = CopilotClient(temperature=0.2)
-                logger.info("Using Copilot bridge at %s", copilot_url)
-            else:
-                # Fall back to Azure OpenAI
+                logger.info("✓ Using Copilot endpoint at %s", copilot_url)
+            except Exception as copilot_error:
+                # Fall back to Azure OpenAI only if Copilot fails
+                logger.warning(f"Copilot endpoint unavailable ({copilot_error}), falling back to Azure OpenAI")
                 if AzureChatOpenAI is None:
-                    raise RuntimeError("AzureChatOpenAI dependency not available; install langchain-openai")
+                    raise RuntimeError("Neither Copilot nor AzureChatOpenAI available; install langchain-openai or configure Copilot")
                 missing = [
                     var for var in [
                         "OPENAI_API_VERSION",
@@ -474,7 +503,7 @@ class AgenticScriptAgent:
                     api_key=os.getenv("AZURE_OPENAI_KEY"),
                     temperature=0.2,
                 )
-                logger.info("Using Azure OpenAI")
+                logger.info("Using Azure OpenAI (fallback)")
         return self.llm
 
     def gather_context(self, scenario: str) -> Dict[str, Any]:
@@ -777,20 +806,39 @@ class AgenticScriptAgent:
             steps = data.get("steps") or []
             # Extract original_url and pages metadata from top-level
             original_url = str(data.get("original_url") or "").strip()
-            pages_metadata = data.get("pages") or []
+            pages_metadata = data.get("pages") or {}
             
             # Build URL to page title mapping and pageId to page info mapping
             url_to_title = {}
             pageid_to_info = {}
-            for page_meta in pages_metadata:
-                if isinstance(page_meta, dict):
-                    page_url = page_meta.get("pageUrl") or page_meta.get("url") or ""
-                    page_title = page_meta.get("pageTitle") or page_meta.get("title") or ""
-                    page_id = page_meta.get("pageId") or ""
-                    if page_url and page_title:
-                        url_to_title[page_url] = page_title
-                    if page_id:
-                        pageid_to_info[page_id] = {"url": page_url, "title": page_title}
+            
+            # Handle both dict and list formats for pages
+            if isinstance(pages_metadata, dict):
+                logger.info(f"[Disk Load] Processing pages dict with {len(pages_metadata)} entries")
+                # Dictionary format: {page_id: {pageUrl, title, ...}}
+                for page_id, page_meta in pages_metadata.items():
+                    if isinstance(page_meta, dict):
+                        page_url = page_meta.get("url") or page_meta.get("pageUrl") or ""
+                        page_title = page_meta.get("title") or page_meta.get("pageTitle") or ""
+                        logger.info(f"[Disk Load]   Page {page_id}: url={page_url[:50] if page_url else 'none'}, title={page_title}")
+                        if page_url and page_title:
+                            url_to_title[page_url] = page_title
+                        if page_id:
+                            pageid_to_info[page_id] = {"url": page_url, "title": page_title}
+            elif isinstance(pages_metadata, list):
+                logger.info(f"[Disk Load] Processing pages list with {len(pages_metadata)} entries")
+                # List format: [{pageId, pageUrl, title, ...}]
+                for page_meta in pages_metadata:
+                    if isinstance(page_meta, dict):
+                        page_url = page_meta.get("pageUrl") or page_meta.get("url") or ""
+                        page_title = page_meta.get("pageTitle") or page_meta.get("title") or ""
+                        page_id = page_meta.get("pageId") or ""
+                        if page_url and page_title:
+                            url_to_title[page_url] = page_title
+                        if page_id:
+                            pageid_to_info[page_id] = {"url": page_url, "title": page_title}
+            
+            logger.info(f"[Disk Load] Built mappings: {len(url_to_title)} URLs, {len(pageid_to_info)} page IDs")
             
             formatted: List[Dict[str, str]] = []
             for idx, step in enumerate(steps, start=1):
@@ -800,7 +848,77 @@ class AgenticScriptAgent:
                 except (TypeError, ValueError):
                     step_no = idx
                 action = str(step.get("action") or "").strip()
+                
+                # Extract navigation from element if not already set
                 navigation = str(step.get("navigation") or "").strip()
+                if not navigation:
+                    # Try to get from visibleText or element selector
+                    visible_text = str(step.get("visibleText") or "").strip()
+                    if visible_text:
+                        navigation = visible_text
+                    else:
+                        element = step.get("element") or {}
+                        if isinstance(element, dict):
+                            selector = element.get("selector", {})
+                            playwright_sel = selector.get("playwright", {})
+                            # Extract from getByLabel, getByPlaceholder, getByText, etc.
+                            for key, value in playwright_sel.items():
+                                if value and isinstance(value, str):
+                                    match = re.search(r"['\"]([^'\"]+)['\"]", value)
+                                    if match:
+                                        navigation = match.group(1)
+                                        break
+                            
+                            # Fallback: Parse HTML element to extract meaningful context
+                            if not navigation:
+                                html = element.get("html", "")
+                                if html and isinstance(html, str):
+                                    # Try to extract from common attributes (ordered by priority)
+                                    # 1. value attribute (for buttons and inputs)
+                                    value_match = re.search(r'value=["\']([^"\']+)["\']', html)
+                                    if value_match and value_match.group(1).strip():
+                                        navigation = value_match.group(1).strip()
+                                    
+                                    # 2. aria-label attribute
+                                    if not navigation:
+                                        aria_match = re.search(r'aria-label=["\']([^"\']+)["\']', html)
+                                        if aria_match and aria_match.group(1).strip():
+                                            navigation = aria_match.group(1).strip()
+                                    
+                                    # 3. placeholder attribute
+                                    if not navigation:
+                                        placeholder_match = re.search(r'placeholder=["\']([^"\']+)["\']', html)
+                                        if placeholder_match and placeholder_match.group(1).strip():
+                                            navigation = placeholder_match.group(1).strip()
+                                    
+                                    # 4. name attribute (for form fields like "username")
+                                    if not navigation:
+                                        name_match = re.search(r'name=["\']([^"\']+)["\']', html)
+                                        if name_match and name_match.group(1).strip():
+                                            name_val = name_match.group(1).strip()
+                                            # Make it more readable: "username" -> "username field"
+                                            if name_val and not name_val.endswith('field'):
+                                                navigation = f"{name_val} field"
+                                            else:
+                                                navigation = name_val
+                                    
+                                    # 5. data-type attribute (like "save")
+                                    if not navigation:
+                                        data_type_match = re.search(r'data-type=["\']([^"\']+)["\']', html)
+                                        if data_type_match and data_type_match.group(1).strip():
+                                            navigation = data_type_match.group(1).strip()
+                                    
+                                    # 6. type attribute as last resort (like "submit", "button")
+                                    if not navigation:
+                                        type_match = re.search(r'type=["\']([^"\']+)["\']', html)
+                                        if type_match and type_match.group(1).strip():
+                                            type_val = type_match.group(1).strip()
+                                            # Only use meaningful types
+                                            if type_val in ["submit", "button", "reset"]:
+                                                navigation = f"{type_val} button"
+                                            elif type_val in ["text", "email", "password", "search", "tel", "url"]:
+                                                navigation = f"{type_val} input"
+                
                 data_val = str(step.get("data") or "").strip()
                 expected = str(step.get("expected") or "").strip()
                 locators = step.get("locators") or {}
@@ -810,17 +928,22 @@ class AgenticScriptAgent:
                 if not isinstance(element, dict):
                     element = {}
                 
-                # Get page URL and map to page title
-                # Try pageUrl first, then try pageId mapping
+                # Get page title from step directly, or map via pageId/URL
+                # Steps from the recorder already have pageTitle field
+                page_title = str(step.get("pageTitle") or "").strip()
                 page_url = str(step.get("pageUrl") or "").strip()
                 page_id = str(step.get("pageId") or "").strip()
                 
-                if not page_url and page_id and page_id in pageid_to_info:
-                    page_url = pageid_to_info[page_id]["url"]
-                
-                page_title = url_to_title.get(page_url) or "Unknown"
-                if not page_url and page_id and page_id in pageid_to_info:
-                    page_title = pageid_to_info[page_id]["title"]
+                # Only use mapping if pageTitle is empty or "Unknown"
+                if not page_title or page_title == "Unknown":
+                    # Use pageId mapping if available
+                    if page_id and page_id in pageid_to_info:
+                        page_title = pageid_to_info[page_id]["title"]
+                        if not page_url:
+                            page_url = pageid_to_info[page_id]["url"]
+                    else:
+                        # Fallback to URL mapping
+                        page_title = url_to_title.get(page_url) or "Unknown"
                 
                 # Preserve steps even if action/navigation are empty to avoid gaps in numbering
                 formatted.append(
@@ -1187,6 +1310,13 @@ class AgenticScriptAgent:
         framework: FrameworkProfile,
         accepted_preview: str,
     ) -> Dict[str, List[Dict[str, str]]]:
+        """Generate script payload using LLM with page-based generation.
+        
+        Always uses LLM (Copilot) to generate test scripts. The LLM is instructed to:
+        - Create separate locator and page files per page when multiple pages detected
+        - Use pageTitle from steps to group actions by page
+        - Generate imports between files correctly
+        """
         context = self.gather_context(scenario)
         vector_steps = context.get("vector_steps") or []
         if not vector_steps:
@@ -1195,47 +1325,20 @@ class AgenticScriptAgent:
                 "Please ingest the refined flow or record the scenario again."
             )
         
-        # Enable LLM-enhanced template generation by default
-        use_templates = True
-        logger.info("[LLM-Enhanced Generation] Using LLM-enhanced template generation")
+        # Always use LLM-enhanced generation with page-based awareness
+        logger.info("[LLM Generation] Starting LLM-enhanced page-based generation")
         
-        if use_templates:
-            # Template-based payload generation
-            try:
-                payload = self._generate_payload_with_templates(scenario, framework, accepted_preview, vector_steps)
-                logger.info(f"[Template Generation] Payload keys: {list(payload.keys())}")
-                logger.info(f"[Template Generation] Locators: {len(payload.get('locators', []))}, Pages: {len(payload.get('pages', []))}, Tests: {len(payload.get('tests', []))}, TestDataMapping: {len(payload.get('testDataMapping', []))}")
-                return payload
-            except Exception as e:
-                logger.error(f"[Template Generation] Failed: {e}", exc_info=True)
-                logger.warning("[Template Generation] Falling back to deterministic generation")
-                # Fall through to deterministic generation
+        # Call LLM to generate page-based scripts
+        payload = self._generate_payload_with_templates(
+            scenario=scenario,
+            framework=framework,
+            accepted_preview=accepted_preview,
+            vector_steps=vector_steps,
+            use_llm_enhancement=True
+        )
         
-        # Deterministic payload generation (fallback)
-        logger.info("[Deterministic Generation] Starting deterministic payload generation")
-        keep_signatures = _extract_preview_signatures(accepted_preview)
-        preview_phrases = _extract_preview_phrases(accepted_preview)
-        
-        final_signatures = None if (keep_signatures is not None and len(keep_signatures) < 2) else keep_signatures
-
-        if final_signatures:
-            matched = [step for step in vector_steps if _step_signature(step) in final_signatures]
-            if not matched or (preview_phrases and len(matched) < max(2, len(preview_phrases) // 2)):
-                def _matches_phrase(step: Dict[str, Any]) -> bool:
-                    nav = _normalize_for_match(step.get("navigation") or step.get("action") or "")
-                    if not nav:
-                        return False
-                    for phrase in preview_phrases:
-                        if not phrase:
-                            continue
-                        if phrase in nav or nav in phrase:
-                            return True
-                    return False
-                fuzzy = [s for s in vector_steps if _matches_phrase(s)]
-                if fuzzy:
-                    return self._build_deterministic_payload(scenario, framework, fuzzy, keep_signatures=None)
-
-        return self._build_deterministic_payload(scenario, framework, vector_steps, keep_signatures=final_signatures)
+        logger.info(f"[LLM Generation] ✓ Generated {len(payload.get('locators', []))} locators, {len(payload.get('pages', []))} pages, {len(payload.get('tests', []))} tests")
+        return payload
     
     def _generate_payload_with_templates(
         self,
@@ -1300,11 +1403,18 @@ class AgenticScriptAgent:
                         reference_locator = ref_locator_path.read_text(encoding='utf-8')
                         logger.info(f"[LLM Enhancement] Loaded reference locator: {len(reference_locator)} chars")
                 
-                # Format steps for prompt
+                # Format steps for prompt - include pageTitle for page-based generation
                 steps_text = "\n".join([
-                    f"Step {i+1}: {step.get('action', '')} | {step.get('navigation', '')} | Data: {step.get('data', '')}"
+                    f"Step {i+1}: [{step.get('pageTitle', 'Unknown Page')}] {step.get('action', '')} | {step.get('navigation', '')} | Data: {step.get('data', '')}"
                     for i, step in enumerate(vector_steps)
                 ])
+                
+                # Detect unique pages for page-based generation instruction
+                page_titles = set(step.get('pageTitle', 'Unknown') for step in vector_steps)
+                page_titles.discard('Unknown')
+                if len(page_titles) >= 2:
+                    logger.info(f"[LLM Generation] Multiple pages detected: {sorted(page_titles)}")
+                    logger.info(f"[LLM Generation] LLM will be instructed to create separate files per page")
                 
                 # Build reference files section
                 reference_section = ""
@@ -1400,19 +1510,22 @@ class AgenticScriptAgent:
             if dir_name not in payload:
                 payload[dir_name] = []
             
+            # Keep the directory prefix in the path for frontend filtering
+            full_path = f"{dir_name}/{file_name}" if '/' not in file_name else file_name
+            
             payload[dir_name].append({
-                "path": file_name,
+                "path": full_path,
                 "content": content
             })
-            logger.info(f"[LLM Enhancement] Added to payload['{dir_name}'] - {len(content)} chars")
+            logger.info(f"[LLM Enhancement] Added to payload['{dir_name}'] with path '{full_path}' - {len(content)} chars")
         
-        # Extract test data mapping from generated page files
+        # Extract test data mapping from generated page files AND vector steps
         test_data_mapping = []
+        import re
+        
+        # Extract from page files (LLM-generated pattern: async setField(value: unknown))
         for file_path, content in all_files.items():
             if '/pages/' in file_path or file_path.startswith('pages/'):
-                # Extract data binding methods from page class
-                # Look for patterns like: async setSupplier(value: unknown)
-                import re
                 method_pattern = r'async\s+(set|select)([A-Z][a-zA-Z0-9]*?)\s*\(value:\s*unknown\)'
                 matches = re.findall(method_pattern, content)
                 
@@ -1434,6 +1547,49 @@ class AgenticScriptAgent:
                             'actionType': action_type,
                             'methods': [method_name]
                         })
+        
+        # If no mappings found from page files, extract from vector steps directly
+        if not test_data_mapping and vector_steps:
+            logger.info("[Test Data Mapping] Extracting from vector steps (no page methods found)")
+            for step in vector_steps:
+                action = step.get('action', '').lower()
+                if action not in ['input', 'fill', 'type', 'select']:
+                    continue
+                
+                # Get field name from navigation or element details
+                navigation = step.get('navigation', '')
+                element = step.get('element', {})
+                element_html = element.get('html', '')
+                
+                # Extract field name from various sources
+                field_name = None
+                if navigation and navigation not in ['', 'username field', 'password field']:
+                    field_name = navigation
+                else:
+                    # Try to extract from HTML attributes
+                    for attr in ['name', 'id', 'aria-label', 'placeholder']:
+                        match = re.search(rf'{attr}="([^"]+)"', element_html)
+                        if match:
+                            field_name = match.group(1)
+                            break
+                
+                if not field_name:
+                    field_name = f"Step {step.get('step', '?')}"
+                
+                # Clean field name
+                field_name = field_name.replace('_', ' ').replace('-', ' ').title()
+                
+                # Check if already exists
+                existing = next((m for m in test_data_mapping if m['columnName'] == field_name), None)
+                if existing:
+                    existing['occurrences'] += 1
+                else:
+                    test_data_mapping.append({
+                        'columnName': field_name,
+                        'occurrences': 1,
+                        'actionType': 'select' if action == 'select' else 'fill',
+                        'methods': [f"step{step.get('step', 0)}_{action}"]
+                    })
         
         payload['testDataMapping'] = test_data_mapping
         logger.info(f"[LLM Enhancement] Final payload: {list(payload.keys())}")
@@ -1488,6 +1644,58 @@ class AgenticScriptAgent:
             vector_steps = context.get("vector_steps") or []
             return self._build_deterministic_payload(scenario, framework, vector_steps, keep_signatures=None)
 
+    @staticmethod
+    def _generate_html_css_combo(css_selector: str, element_html: str, step: Dict[str, Any]) -> str:
+        """Generate CSS selector enhanced with HTML element details.
+        
+        Args:
+            css_selector: Base CSS selector
+            element_html: HTML string of the element
+            step: Step dictionary with additional context
+            
+        Returns:
+            Enhanced CSS selector with multiple element details
+        """
+        import re
+        
+        # Extract multiple attributes from HTML
+        attributes = {}
+        attr_patterns = {
+            'name': r'name="([^"]+)"',
+            'id': r'id="([^"]+)"',
+            'class': r'class="([^"]+)"',
+            'placeholder': r'placeholder="([^"]+)"',
+            'aria-label': r'aria-label="([^"]+)"',
+            'type': r'type="([^"]+)"',
+            'value': r'value="([^"]+)"'
+        }
+        
+        for attr_name, pattern in attr_patterns.items():
+            match = re.search(pattern, element_html)
+            if match:
+                attributes[attr_name] = match.group(1)
+        
+        # Build enhanced selector with multiple attributes
+        enhanced_parts = [css_selector]
+        
+        if attributes.get('id'):
+            enhanced_parts.append(f"[id='{attributes['id']}']")  
+        if attributes.get('name'):
+            enhanced_parts.append(f"[name='{attributes['name']}']")  
+        if attributes.get('aria-label'):
+            enhanced_parts.append(f"[aria-label*='{attributes['aria-label'][:30]}']")  
+        if attributes.get('placeholder'):
+            enhanced_parts.append(f"[placeholder='{attributes['placeholder']}']")  
+        if attributes.get('type'):
+            enhanced_parts.append(f"[type='{attributes['type']}']")  
+        
+        # Always include at least 2 element details if available
+        if len(enhanced_parts) >= 2:
+            return ''.join(enhanced_parts[:4])  # Use up to 4 attributes for specificity
+        else:
+            # Fallback to original CSS
+            return css_selector
+    
     @staticmethod
     def _generate_enhanced_xpath(element: Dict[str, Any], step: Dict[str, Any]) -> str:
         """
@@ -1576,8 +1784,10 @@ class AgenticScriptAgent:
         
         # Process each page
         for page_title, page_steps in grouped_pages.items():
-            page_slug = _slugify(page_title)
-            page_class_name = f"{_to_camel_case(page_slug).capitalize()}Page"
+            # Use page title directly for file names (not slugified)
+            # Sanitize only characters that are invalid for file names
+            page_file_name = page_title.replace('/', '-').replace('\\', '-').replace(':', '-').replace('*', '-').replace('?', '-').replace('"', '').replace('<', '-').replace('>', '-').replace('|', '-')
+            page_class_name = f"{_to_camel_case(_slugify(page_title)).capitalize()}Page"
             
             # Get page URL for login/home detection
             page_url = ""
@@ -1603,13 +1813,13 @@ class AgenticScriptAgent:
                 logger.info(f"Reusing existing {existing_class} for page: {page_title}")
                 continue
             
-            # Generate locators and page files for this page
-            locators_path = (framework.locators_dir or root / 'locators') / f"{page_slug}.ts"
-            page_filename = f"{page_class_name}.ts"
+            # Generate locators and page files for this page using page title as file name
+            locators_path = (framework.locators_dir or root / 'locators') / f"{page_file_name}.locators.ts"
+            page_filename = f"{page_file_name}.page.ts"
             page_path = (framework.pages_dir or root / 'pages') / page_filename
             
             # Generate locators content
-            locators_content, page_data_bindings = self._generate_locators_for_page(page_steps, page_slug)
+            locators_content, page_data_bindings = self._generate_locators_for_page(page_steps, page_file_name)
             
             # Collect data bindings
             all_data_bindings.extend(page_data_bindings)
@@ -1625,14 +1835,16 @@ class AgenticScriptAgent:
             
             page_imports.append({
                 'className': page_class_name,
-                'fileName': page_slug,
+                'fileName': page_file_name,  # Use actual page title for imports
                 'isExisting': False,
                 'pageTitle': page_title,
                 'varName': page_class_name[0].lower() + page_class_name[1:] if page_class_name else 'page'
             })
         
         # Generate single test file that orchestrates all pages
-        test_slug = _slugify(scenario)
+        # Use flow_name from steps if available, otherwise slugify scenario
+        flow_name = vector_steps[0].get('flow_name') if vector_steps else None
+        test_slug = flow_name if flow_name else _slugify(scenario)
         test_path = (framework.tests_dir or root / 'tests') / f"{test_slug}.spec.ts"
         test_content = self._generate_multi_page_test(scenario, page_imports, grouped_pages, test_path, framework)
         
@@ -1679,49 +1891,79 @@ class AgenticScriptAgent:
         method_names: set[str] = set()
         
         for index, step in enumerate(page_steps):
-            locators = step.get('locators') or {}
-            # Priority: 1) playwright 2) css 3) xpath
-            playwright_loc = locators.get('playwright')
+            element = step.get('element') or {}
+            selector_obj = element.get('selector', {})
+            visible_text = step.get('visibleText', '').strip()
+            playwright_sel = selector_obj.get('playwright', {})
+            
+            # NEW PRIORITY: Visible text + Playwright > Visible text + CSS > Playwright + CSS/XPath > HTML + CSS > XPath + HTML
             selector = ''
+            selector_source = ''
             
-            # Try playwright locators first (byRole, byText, byLabel)
-            if playwright_loc:
-                if isinstance(playwright_loc, dict):
-                    # Prefer byRole > byText > byLabel
-                    selector = (playwright_loc.get('byRole') or 
-                               playwright_loc.get('byText') or 
-                               playwright_loc.get('byLabel') or '')
-                elif isinstance(playwright_loc, str):
-                    selector = playwright_loc
+            # PRIORITY 1: Visible text + Playwright properties (BEST)
+            if visible_text and playwright_sel and isinstance(playwright_sel, dict):
+                pw_methods = []
+                for pw_key, pw_value in playwright_sel.items():
+                    if pw_value:
+                        pw_methods.append(pw_value)
+                if pw_methods:
+                    # Combine visible text with Playwright selector
+                    selector = f"{pw_methods[0]}"
+                    selector_source = f"visible_text+playwright ({visible_text})"
+                    logger.info(f"Step {index + 1}: Using visible text + Playwright: {selector}")
             
-            # Fallback to CSS if no playwright locator
+            # PRIORITY 2: Visible text + CSS (if Playwright not available)
+            if not selector and visible_text:
+                css_selector = selector_obj.get('css', '')
+                if css_selector:
+                    # Build composite selector with text validation
+                    if css_selector.startswith('//'):
+                        selector = f"xpath={css_selector}[contains(text(), '{visible_text}')]"
+                    else:
+                        selector = f"{css_selector}:has-text('{visible_text}')"
+                    selector_source = f"visible_text+css ({visible_text})"
+                    logger.info(f"Step {index + 1}: Using visible text + CSS: {selector}")
+            
+            # PRIORITY 3: Playwright properties + CSS/XPath (no visible text)
+            if not selector and playwright_sel and isinstance(playwright_sel, dict):
+                css_selector = selector_obj.get('css', '')
+                xpath_selector = selector_obj.get('xpath', '')
+                
+                # Try Playwright + CSS first
+                if css_selector:
+                    pw_value = next((v for v in playwright_sel.values() if v), None)
+                    if pw_value:
+                        # Combine both for resilience
+                        selector = f"{pw_value} >> {css_selector}"
+                        selector_source = "playwright+css"
+                        logger.info(f"Step {index + 1}: Using Playwright + CSS: {selector}")
+                # Try Playwright + XPath if CSS not available
+                elif xpath_selector:
+                    pw_value = next((v for v in playwright_sel.values() if v), None)
+                    if pw_value:
+                        selector = f"{pw_value} >> xpath={xpath_selector}"
+                        selector_source = "playwright+xpath"
+                        logger.info(f"Step {index + 1}: Using Playwright + XPath: {selector}")
+            
+            # PRIORITY 4: HTML + CSS properties (both not available)
             if not selector:
-                selector = _normalize_selector(
-                    locators.get('css')
-                    or locators.get('stable')
-                    or locators.get('xpath')
-                    or locators.get('raw_xpath')
-                    or locators.get('selector')
-                    or ''
-                )
+                css_selector = selector_obj.get('css', '')
+                element_html = element.get('html', '')
+                if css_selector and element_html:
+                    # Extract key attributes from HTML to enhance CSS
+                    selector = self._generate_html_css_combo(css_selector, element_html, step)
+                    selector_source = "html+css"
+                    logger.info(f"Step {index + 1}: Using HTML + CSS combo: {selector}")
             
+            # PRIORITY 5: XPath + HTML properties (last resort)
             if not selector:
-                element = step.get('element') or {}
-                selector = _normalize_selector(
-                    element.get('css')
-                    or element.get('playwright')
-                    or element.get('stable')
-                    or element.get('xpath')
-                    or element.get('raw_xpath')
-                )
-            
-            # If still no selector, try to generate enhanced XPath from element data
-            if not selector:
-                element = step.get('element') or {}
-                if element:
+                element_html = element.get('html', '')
+                if element_html:
                     try:
                         selector = self._generate_enhanced_xpath(element, step)
-                        logger.info(f"Generated enhanced XPath for step {index + 1}: {selector}")
+                        selector = f"xpath={selector}" if not selector.startswith('xpath=') else selector
+                        selector_source = "xpath+html (generated)"
+                        logger.info(f"Step {index + 1}: Using enhanced XPath: {selector}")
                     except Exception as e:
                         logger.warning(f"Failed to generate enhanced XPath: {e}")
             
@@ -1733,15 +1975,10 @@ class AgenticScriptAgent:
             if selector in selector_to_key:
                 continue
             
-            # Generate key name
-            base_name = (
-                locators.get('name')
-                or locators.get('title')
-                or locators.get('labels')
-                or step.get('navigation')
-                or step.get('action')
-                or f'step{index + 1}'
-            )
+            # Generate key name from navigation or action
+            navigation = step.get('navigation', '')
+            action = step.get('action', '')
+            base_name = navigation or action or f'step{index + 1}'
             base_key = _to_camel_case(base_name) or f'step{index + 1}'
             key = base_key
             suffix = 2
@@ -1753,40 +1990,42 @@ class AgenticScriptAgent:
             used_keys.add(key)
             entries.append((key, selector))
             
-            # Extract data bindings
-            data_key = _extract_data_key(step)
-            if data_key:
-                action_lower = (step.get('action') or '').lower()
-                navigation_lower = (step.get('navigation') or '').lower()
-                action_category = 'fill'
-                if 'select' in action_lower or 'dropdown' in navigation_lower or 'choose' in navigation_lower:
-                    action_category = 'select'
+            # Extract data bindings for input/select fields
+            action_lower = action.lower()
+            if action_lower in ['input', 'fill', 'type', 'select']:
+                data_key = _extract_data_key(step)
+                if not data_key:
+                    # Extract from navigation
+                    data_key = navigation.replace('Enter', '').replace('Select', '').replace('Choose', '').strip()
                 
-                method_suffix = _to_camel_case(data_key) or _to_camel_case(base_name) or key
-                if method_suffix:
-                    method_suffix = method_suffix[:1].upper() + method_suffix[1:]
-                else:
-                    method_suffix = key.title()
-                
-                prefix = 'set' if action_category != 'select' else 'select'
-                candidate_name = prefix + (method_suffix[:1].upper() + method_suffix[1:])
-                if candidate_name in method_names:
-                    counter = 2
-                    base_candidate = candidate_name
-                    while candidate_name in method_names:
-                        candidate_name = f"{base_candidate}{counter}"
-                        counter += 1
-                method_names.add(candidate_name)
-                
-                normalised_key = re.sub(r'[^a-z0-9]+', '', data_key.lower())
-                data_bindings.append({
-                    'locator_key': key,
-                    'data_key': data_key,
-                    'normalised': normalised_key,
-                    'method_name': candidate_name,
-                    'fallback': _extract_data_value(step),
-                    'action_category': action_category,
-                })
+                if data_key:
+                    action_category = 'select' if action_lower == 'select' else 'fill'
+                    
+                    method_suffix = _to_camel_case(data_key)
+                    if method_suffix:
+                        method_suffix = method_suffix[:1].upper() + method_suffix[1:]
+                    else:
+                        method_suffix = key.title()
+                    
+                    prefix = 'set' if action_category != 'select' else 'select'
+                    candidate_name = prefix + method_suffix
+                    if candidate_name in method_names:
+                        counter = 2
+                        base_candidate = candidate_name
+                        while candidate_name in method_names:
+                            candidate_name = f"{base_candidate}{counter}"
+                            counter += 1
+                    method_names.add(candidate_name)
+                    
+                    normalised_key = re.sub(r'[^a-z0-9]+', '', data_key.lower())
+                    data_bindings.append({
+                        'locator_key': key,
+                        'data_key': data_key,
+                        'normalised': normalised_key,
+                        'method_name': candidate_name,
+                        'fallback': _extract_data_value(step),
+                        'action_category': action_category,
+                    })
         
         # Generate locators file
         locators_lines = ['const locators = {'] + [
@@ -1803,23 +2042,175 @@ class AgenticScriptAgent:
         page_path: Path,
         framework: FrameworkProfile
     ) -> str:
-        """Generate page class file content for a single page."""
-        page_var = page_class_name[:1].lower() + page_class_name[1:] if page_class_name else 'pageObject'
+        """Generate page class file content for a single page with full structure."""
         
-        page_lines: List[str] = [
+        # Extract locator keys and data bindings
+        locator_keys = []
+        data_bindings = []
+        used_keys = set()
+        method_names = set()
+        
+        for index, step in enumerate(page_steps):
+            # Generate locator key name
+            navigation = step.get('navigation', '')
+            action = step.get('action', '')
+            base_name = navigation or action or f'step{index + 1}'
+            base_key = _to_camel_case(base_name) or f'step{index + 1}'
+            key = base_key
+            suffix = 2
+            while key in used_keys:
+                key = f"{base_key}{suffix}"
+                suffix += 1
+            used_keys.add(key)
+            locator_keys.append(key)
+            
+            # Extract data bindings
+            action_lower = action.lower()
+            if action_lower in ['input', 'fill', 'type', 'select']:
+                data_key = _extract_data_key(step)
+                if not data_key:
+                    data_key = navigation.replace('Enter', '').replace('Select', '').replace('Choose', '').strip()
+                
+                if data_key:
+                    action_category = 'select' if action_lower == 'select' else 'fill'
+                    method_suffix = _to_camel_case(data_key)
+                    if method_suffix:
+                        method_suffix = method_suffix[:1].upper() + method_suffix[1:]
+                    else:
+                        method_suffix = key.title()
+                    
+                    prefix = 'set' if action_category != 'select' else 'select'
+                    candidate_name = prefix + method_suffix
+                    if candidate_name in method_names:
+                        counter = 2
+                        base_candidate = candidate_name
+                        while candidate_name in method_names:
+                            candidate_name = f"{base_candidate}{counter}"
+                            counter += 1
+                    method_names.add(candidate_name)
+                    
+                    data_bindings.append({
+                        'locator_key': key,
+                        'data_key': data_key,
+                        'method_name': candidate_name,
+                        'action_category': action_category,
+                    })
+        
+        # Start building page class
+        page_lines = [
             "import { Page, Locator } from '@playwright/test';",
+            'import HelperClass from "../util/methods.utility.ts";',
             f'import locators from "{_relative_import(page_path, locators_path)}";',
             '',
             f'class {page_class_name} {{',
             '  page: Page;',
+            '  helper: HelperClass;',
+        ]
+        
+        # Add locator properties
+        for key in locator_keys:
+            page_lines.append(f'  {key}: Locator;')
+        
+        page_lines.extend([
             '',
             '  constructor(page: Page) {',
             '    this.page = page;',
+            '    this.helper = new HelperClass(page);',
+        ])
+        
+        # Initialize locators in constructor
+        for key in locator_keys:
+            page_lines.append(f'    this.{key} = page.locator(locators.{key});')
+        
+        page_lines.extend([
             '  }',
+            '',
+            '  private coerceValue(value: unknown): string {',
+            '    if (value === undefined || value === null) {',
+            "      return '';",
+            '    }',
+            '    if (typeof value === \'number\') {',
+            '      return `${value}`;',
+            '    }',
+            '    if (typeof value === \'string\') {',
+            '      return value;',
+            '    }',
+            "    return `${value ?? ''}`;",
+            '  }',
+            '',
+            '  private normaliseDataKey(value: string): string {',
+            "    return (value || '').replace(/[^a-z0-9]+/gi, '').toLowerCase();",
+            '  }',
+            '',
+            "  private resolveDataValue(formData: Record<string, any> | null | undefined, key: string, fallback: string = ''): string {",
+            '    const target = this.normaliseDataKey(key);',
+            '    if (formData) {',
+            '      for (const entryKey of Object.keys(formData)) {',
+            '        if (this.normaliseDataKey(entryKey) === target) {',
+            '          const candidate = this.coerceValue(formData[entryKey]);',
+            "          if (candidate.trim() !== '') {",
+            '            return candidate;',
+            '          }',
+            '        }',
+            '      }',
+            '    }',
+            '    return this.coerceValue(fallback);',
+            '  }',
+        ])
+        
+        # Add setter methods for data bindings
+        for binding in data_bindings:
+            method_name = binding['method_name']
+            locator_key = binding['locator_key']
+            action_category = binding['action_category']
+            
+            page_lines.extend([
+                '',
+                '  async ' + method_name + '(value: unknown): Promise<void> {',
+                '    const finalValue = this.coerceValue(value);',
+                f'    await this.{locator_key}.fill(finalValue);',
+                '  }',
+            ])
+        
+        # Add applyData method if there are data bindings
+        if data_bindings:
+            page_lines.extend([
+                '',
+                '  async applyData(formData: Record<string, any> | null | undefined, keys?: string[], index: number = 0): Promise<void> {',
+                '    const fallbackValues: Record<string, string> = {',
+            ])
+            
+            for binding in data_bindings:
+                data_key = binding['data_key']
+                page_lines.append(f'      "{data_key}": "",')
+            
+            page_lines.extend([
+                '    };',
+                '    const targetKeys = Array.isArray(keys) && keys.length ? keys.map((key) => this.normaliseDataKey(key)) : null;',
+                '    const shouldHandle = (key: string) => {',
+                '      if (!targetKeys) {',
+                '        return true;',
+                '      }',
+                '      return targetKeys.includes(this.normaliseDataKey(key));',
+                '    };',
+            ])
+            
+            for binding in data_bindings:
+                data_key = binding['data_key']
+                method_name = binding['method_name']
+                page_lines.extend([
+                    f'    if (shouldHandle("{data_key}")) {{',
+                    f'      await this.{method_name}(this.resolveDataValue(formData, "{data_key}", fallbackValues["{data_key}"] ?? \'\'));',
+                    '    }',
+                ])
+            
+            page_lines.append('  }')
+        
+        page_lines.extend([
             '}',
             '',
             f'export default {page_class_name};'
-        ]
+        ])
         
         return "\n".join(page_lines) + os.linesep
     
@@ -1941,6 +2332,9 @@ class AgenticScriptAgent:
             page_title = step.get('pageTitle') or step.get('page_title')
             if page_title and page_title != 'Unknown':
                 page_titles.add(page_title)
+        
+        logger.info(f"[Page Detection] Found {len(page_titles)} unique pages: {sorted(page_titles)}")
+        logger.info(f"[Page Detection] First step data: {vector_steps[0] if vector_steps else 'No steps'}")
         
         if len(page_titles) >= 2:  # Use page-based generation only if we have 2+ distinct pages
             logger.info(f"Page-based generation: {len(page_titles)} unique pages detected")

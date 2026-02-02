@@ -1,0 +1,9 @@
+{
+  "credentials": {
+    "username": "",
+    "password": "",
+    "base_url": ""
+  },
+  "timeout": 30000,
+  "headless": false
+}
