@@ -207,16 +207,37 @@ def _extract_data_value(step: Dict[str, Any]) -> str:
 
 
 def _extract_data_key(step: Dict[str, Any]) -> str:
+    # Check if step has applyDataKeys from code generation (first candidate is the Excel column name)
+    apply_data_keys = step.get("applyDataKeys")
+    if apply_data_keys and isinstance(apply_data_keys, list) and len(apply_data_keys) > 0:
+        return apply_data_keys[0]  # Return first candidate (Excel column name)
+    
+    # Fallback to original logic for backward compatibility
     data = step.get("data")
     if isinstance(data, str) and ":" in data:
         key, _ = data.split(":", 1)
         return key.strip()
+    
     navigation = step.get("navigation")
     if isinstance(navigation, str):
         text = navigation.strip()
+        
+        # Clean up common prefixes and suffixes from recorded action text
+        # Remove table/form prefixes like "Purchtable", "Inventtable", etc.
+        text = re.sub(r'^[A-Z][a-z]+table\s+', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'^[A-Z][a-z]+form\s+', '', text, flags=re.IGNORECASE)
+        
+        # Remove "Field" suffix
+        text = re.sub(r'\s+Field$', '', text, flags=re.IGNORECASE)
+        
+        # Extract meaningful field name from "Enter X" pattern
         match = re.search(r"enter\s+([a-z0-9 _-]+)", text, re.IGNORECASE)
         if match:
             return match.group(1).strip()
+        
+        # Return cleaned text
+        return text.strip()
+    
     return ""
 
 
@@ -1519,77 +1540,59 @@ class AgenticScriptAgent:
             })
             logger.info(f"[LLM Enhancement] Added to payload['{dir_name}'] with path '{full_path}' - {len(content)} chars")
         
-        # Extract test data mapping from generated page files AND vector steps
+        # Extract test data mapping from generated TEST files (applyData calls)
         test_data_mapping = []
         import re
         
-        # Extract from page files (LLM-generated pattern: async setField(value: unknown))
+        # Extract from test files by parsing applyData() calls
         for file_path, content in all_files.items():
-            if '/pages/' in file_path or file_path.startswith('pages/'):
-                method_pattern = r'async\s+(set|select)([A-Z][a-zA-Z0-9]*?)\s*\(value:\s*unknown\)'
-                matches = re.findall(method_pattern, content)
+            if '/tests/' in file_path or file_path.startswith('tests/') or file_path.endswith('.spec.ts'):
+                # Pattern: await page.applyData(dataRow, ["ColumnName", "Alias1", "Alias2"], index)
+                # We want to extract the first element of the array (the primary column name)
+                apply_data_pattern = r'await\s+\w+\.applyData\(dataRow,\s*\[([^\]]+)\](?:,\s*(\d+))?\)'
+                matches = re.findall(apply_data_pattern, content)
                 
-                for prefix, field_name in matches:
-                    # Convert camelCase to Title Case for column name
-                    column_name = re.sub(r'([A-Z])', r' \1', field_name).strip()
-                    action_type = 'select' if prefix == 'select' else 'fill'
-                    method_name = f"{prefix}{field_name}"
+                for column_list_str, index_str in matches:
+                    # Parse the column names array
+                    column_names = re.findall(r'["\']([^"\']+)["\']', column_list_str)
+                    if not column_names:
+                        continue
+                    
+                    # First element is the primary Excel column name
+                    primary_column = column_names[0]
                     
                     # Check if this column already exists
-                    existing = next((m for m in test_data_mapping if m['columnName'] == column_name), None)
+                    existing = next((m for m in test_data_mapping if m['columnName'] == primary_column), None)
                     if existing:
                         existing['occurrences'] += 1
-                        existing['methods'].append(method_name)
                     else:
                         test_data_mapping.append({
-                            'columnName': column_name,
+                            'columnName': primary_column,
                             'occurrences': 1,
-                            'actionType': action_type,
-                            'methods': [method_name]
+                            'actionType': 'fill',  # Default to fill, can be refined later
+                            'methods': ['applyData']  # Actual method used in code
                         })
         
-        # If no mappings found from page files, extract from vector steps directly
-        if not test_data_mapping and vector_steps:
-            logger.info("[Test Data Mapping] Extracting from vector steps (no page methods found)")
-            for step in vector_steps:
-                action = step.get('action', '').lower()
-                if action not in ['input', 'fill', 'type', 'select']:
-                    continue
-                
-                # Get field name from navigation or element details
-                navigation = step.get('navigation', '')
-                element = step.get('element', {})
-                element_html = element.get('html', '')
-                
-                # Extract field name from various sources
-                field_name = None
-                if navigation and navigation not in ['', 'username field', 'password field']:
-                    field_name = navigation
-                else:
-                    # Try to extract from HTML attributes
-                    for attr in ['name', 'id', 'aria-label', 'placeholder']:
-                        match = re.search(rf'{attr}="([^"]+)"', element_html)
-                        if match:
-                            field_name = match.group(1)
-                            break
-                
-                if not field_name:
-                    field_name = f"Step {step.get('step', '?')}"
-                
-                # Clean field name
-                field_name = field_name.replace('_', ' ').replace('-', ' ').title()
-                
-                # Check if already exists
-                existing = next((m for m in test_data_mapping if m['columnName'] == field_name), None)
-                if existing:
-                    existing['occurrences'] += 1
-                else:
-                    test_data_mapping.append({
-                        'columnName': field_name,
-                        'occurrences': 1,
-                        'actionType': 'select' if action == 'select' else 'fill',
-                        'methods': [f"step{step.get('step', 0)}_{action}"]
-                    })
+        # If no mappings found from test files, extract from page files as fallback
+        if not test_data_mapping:
+            logger.info("[Test Data Mapping] No applyData calls found in test files, extracting from page files")
+            for file_path, content in all_files.items():
+                if '/pages/' in file_path or file_path.startswith('pages/'):
+                    # Extract from applyData method's fallbackValues
+                    fallback_pattern = r'const fallbackValues: Record<string, string> = \{([^}]+)\}'
+                    fallback_match = re.search(fallback_pattern, content, re.DOTALL)
+                    if fallback_match:
+                        fallback_content = fallback_match.group(1)
+                        # Extract column names from "ColumnName": "" entries
+                        column_matches = re.findall(r'["\']([^"\']+)["\']\s*:', fallback_content)
+                        for column_name in column_matches:
+                            if column_name not in [m['columnName'] for m in test_data_mapping]:
+                                test_data_mapping.append({
+                                    'columnName': column_name,
+                                    'occurrences': 1,
+                                    'actionType': 'fill',
+                                    'methods': ['applyData']
+                                })
         
         payload['testDataMapping'] = test_data_mapping
         logger.info(f"[LLM Enhancement] Final payload: {list(payload.keys())}")
@@ -2007,6 +2010,9 @@ class AgenticScriptAgent:
                     else:
                         method_suffix = key.title()
                     
+                    # Use method_suffix as the actual column name (what code expects)
+                    actual_column_name = method_suffix
+                    
                     prefix = 'set' if action_category != 'select' else 'select'
                     candidate_name = prefix + method_suffix
                     if candidate_name in method_names:
@@ -2017,10 +2023,10 @@ class AgenticScriptAgent:
                             counter += 1
                     method_names.add(candidate_name)
                     
-                    normalised_key = re.sub(r'[^a-z0-9]+', '', data_key.lower())
+                    normalised_key = re.sub(r'[^a-z0-9]+', '', actual_column_name.lower())
                     data_bindings.append({
                         'locator_key': key,
-                        'data_key': data_key,
+                        'data_key': actual_column_name,
                         'normalised': normalised_key,
                         'method_name': candidate_name,
                         'fallback': _extract_data_value(step),
@@ -2079,6 +2085,9 @@ class AgenticScriptAgent:
                     else:
                         method_suffix = key.title()
                     
+                    # Use method_suffix as the actual column name (what code expects)
+                    actual_column_name = method_suffix
+                    
                     prefix = 'set' if action_category != 'select' else 'select'
                     candidate_name = prefix + method_suffix
                     if candidate_name in method_names:
@@ -2091,7 +2100,7 @@ class AgenticScriptAgent:
                     
                     data_bindings.append({
                         'locator_key': key,
-                        'data_key': data_key,
+                        'data_key': actual_column_name,
                         'method_name': candidate_name,
                         'action_category': action_category,
                     })
@@ -2516,6 +2525,10 @@ class AgenticScriptAgent:
                     method_suffix = method_suffix[:1].upper() + method_suffix[1:]
                 else:
                     method_suffix = key.title()
+                
+                # Use method_suffix as the actual column name (what code expects)
+                actual_column_name = method_suffix
+                
                 prefix = 'set' if action_category != 'select' else 'select'
                 candidate_name = prefix + (method_suffix[:1].upper() + method_suffix[1:])
                 if candidate_name in method_names:
@@ -2525,11 +2538,11 @@ class AgenticScriptAgent:
                         candidate_name = f"{base_candidate}{counter}"
                         counter += 1
                 method_names.add(candidate_name)
-                normalised_key = re.sub(r'[^a-z0-9]+', '', data_key.lower())
+                normalised_key = re.sub(r'[^a-z0-9]+', '', actual_column_name.lower())
                 data_bindings.append(
                     {
                         'locator_key': key,
-                        'data_key': data_key,
+                        'data_key': actual_column_name,
                         'normalised': normalised_key,
                         'method_name': candidate_name,
                         'fallback': _extract_data_value(step),

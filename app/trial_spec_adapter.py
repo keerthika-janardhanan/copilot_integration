@@ -46,7 +46,14 @@ def _is_id_like(value: str) -> bool:
 
 
 def load_trial_credentials(repo_root: Path, case_id: Optional[str] = None) -> Optional[TrialCredentials]:
-    """Load trial credentials from trial_run_config.json instead of testmanager.xlsx"""
+    """Load trial credentials from trial_run_config.json if enabled via .env flag"""
+    # Check if trial config should be used
+    use_trial_config = os.getenv('USE_TRIAL_CONFIG', 'NO').upper() == 'YES'
+    
+    if not use_trial_config:
+        logger.info("Trial adapter: USE_TRIAL_CONFIG=NO, skipping trial_run_config.json")
+        return None
+    
     trial_config_path = Path(__file__).resolve().parents[1] / "trial_run_config.json"
     
     if not trial_config_path.exists():
@@ -60,9 +67,16 @@ def load_trial_credentials(repo_root: Path, case_id: Optional[str] = None) -> Op
         logger.warning("Trial adapter: failed to read trial_run_config.json (%s)", exc)
         return None
     
-    base_url = config.get("base_url", "").strip()
-    username = config.get("username", "").strip()
-    password = config.get("password", "").strip()
+    # Support both flat and nested structure
+    if 'credentials' in config:
+        creds = config['credentials']
+        base_url = creds.get("base_url", "").strip()
+        username = creds.get("username", "").strip()
+        password = creds.get("password", "").strip()
+    else:
+        base_url = config.get("base_url", "").strip()
+        username = config.get("username", "").strip()
+        password = config.get("password", "").strip()
     
     if not (username and password):
         logger.warning("Trial adapter: trial_run_config.json missing username or password")
@@ -84,6 +98,13 @@ def trial_env_overrides(repo_root: Path, case_id: Optional[str] = None, spec_pat
     Build environment variable overrides for trial executions using credentials from trial_run_config.json.
     This enables specs that rely on process.env to use consistent values without editing source files.
     """
+    # Check if trial config should be used
+    use_trial_config = os.getenv('USE_TRIAL_CONFIG', 'NO').upper() == 'YES'
+    
+    if not use_trial_config:
+        logger.info("Trial adapter: USE_TRIAL_CONFIG=NO, skipping trial_run_config.json")
+        return {}
+    
     # Always read from trial_run_config.json at the project root
     trial_config_path = Path(__file__).resolve().parents[1] / "trial_run_config.json"
     
@@ -98,9 +119,16 @@ def trial_env_overrides(repo_root: Path, case_id: Optional[str] = None, spec_pat
         logger.warning("Trial adapter: failed to read trial_run_config.json (%s)", exc)
         return {}
     
-    base_url = config.get("base_url", "").strip()
-    username = config.get("username", "").strip()
-    password = config.get("password", "").strip()
+    # Support both flat and nested structure
+    if 'credentials' in config:
+        creds = config['credentials']
+        base_url = creds.get("base_url", "").strip()
+        username = creds.get("username", "").strip()
+        password = creds.get("password", "").strip()
+    else:
+        base_url = config.get("base_url", "").strip()
+        username = config.get("username", "").strip()
+        password = config.get("password", "").strip()
     
     if not (username and password):
         logger.warning("Trial adapter: trial_run_config.json missing username or password")
@@ -307,6 +335,29 @@ def adapt_spec_content_for_trial(source: str, repo_root: Path) -> Tuple[str, boo
 
     updated = source
     changed_any = False
+    
+    # Fix import paths - remove .ts extensions
+    import_pattern = r"from\s+['\"]([^'\"]+)\.ts['\"];?"
+    if re.search(import_pattern, updated):
+        updated = re.sub(import_pattern, r"from '\1';", updated)
+        changed_any = True
+        logger.info("[TrialAdapter] Removed .ts extensions from imports")
+        print("[TrialAdapter] Removed .ts extensions from imports")
+    
+    # Remove imports for non-existent files
+    import re
+    lines = updated.split('\n')
+    filtered_lines = []
+    for line in lines:
+        # Skip imports for login.page, home.page, and other common non-existent pages
+        # Match both with and without .ts extension
+        if re.search(r"import.*from\s+['\"][^'\"]*/(login\.page|home\.page|LoginPage|HomePage)(\.ts)?['\"];", line):
+            logger.info(f"[TrialAdapter] Removed non-existent import: {line.strip()}")
+            print(f"[TrialAdapter] Removed non-existent import: {line.strip()}")
+            changed_any = True
+            continue
+        filtered_lines.append(line)
+    updated = '\n'.join(filtered_lines)
 
     # Inject per-file Playwright settings to disable tracing and avoid artifact collisions
     try:
@@ -376,12 +427,12 @@ def adapt_spec_content_for_trial(source: str, repo_root: Path) -> Tuple[str, boo
 
     # Pattern 2: If not found, try generic patterns for username-like and password-like fields
     if not user_changed:
-        logger.info("[TrialAdapter] Trying generic username patterns (user|username|userid|email)...")
+        logger.info("[TrialAdapter] Trying generic username patterns (user|username|userid|email|login)...")
         print("\n[TrialAdapter] Trying generic username patterns...")
-        # Match any .fill() where the locator name contains user/username/userid/email
+        # Match any .fill() where the locator name contains user/username/userid/email/login
         updated, user_changed = _replace_fill_call(
             updated,
-            r"(await\s+(?:flow|page|locators)\.(?:user|username|userName|userid|userId|email)[^.]*\.fill\()\s*(?:['\"].*?['\"])(\);)",
+            r"(await\s+(?:flow|page|locators|\w+)\.(?:user|username|userName|userid|userId|email|login|emailPhone)[^.]*\.fill\()\s*(?:['\"].*?['\"])(\);)",
             credentials.username,
         )
         logger.info(f"[TrialAdapter] Generic username replaced: {user_changed}")
@@ -456,8 +507,6 @@ def adapt_spec_content_for_trial(source: str, repo_root: Path) -> Tuple[str, boo
 
     updated, data_path_changed = _fix_data_path_handling(updated)
     changed_any |= data_path_changed
-    
-    # Additional brute force fix - replace any remaining data/ references
     if "data/" in updated:
         before_count = updated.count("data/")
         updated = updated.replace("'data/", "'")

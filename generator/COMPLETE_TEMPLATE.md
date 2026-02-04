@@ -139,8 +139,6 @@ export default {FlowName}page;
 ```typescript
 import { test } from "./testSetup.ts";
 import PageObject from "../pages/{FlowName}Page.ts";
-import LoginPage from "../pages/login.page.ts";
-import HomePage from "../pages/home.page.ts";
 import { getTestToRun, shouldRun, readExcelData } from "../util/csvFileManipulation.ts";
 import { attachScreenshot, namedStep } from "../util/screenshot.ts";
 import * as dotenv from 'dotenv';
@@ -157,16 +155,12 @@ test.beforeAll(() => {
 
 test.describe("{Test_Name}", () => {
   let {flowname}page: PageObject;
-  let loginPage: LoginPage;
-  let homePage: HomePage;
 
   const run = (name: string, fn: ({ page }, testinfo: any) => Promise<void>) =>
     (shouldRun(name) ? test : test.skip)(name, fn);
 
   run("{Test_Name}", async ({ page }, testinfo) => {
     {flowname}page = new PageObject(page);
-    loginPage = new LoginPage(page);
-    homePage = new HomePage(page);
     const testCaseId = testinfo.title;
     const testRow: Record<string, any> = executionList?.find((row: any) => row['TestCaseID'] === testCaseId) ?? {};
     const defaultDataStem = (() => {
@@ -237,25 +231,19 @@ test.describe("{Test_Name}", () => {
       }
       return fallback;
     };
-    const dataPath = ensureDataFile();
-    if (dataPath && dataReferenceId && dataIdColumn) {
-      dataRow = readExcelData(dataPath, dataSheetTab || '', dataReferenceId, dataIdColumn) ?? {};
-      if (!dataRow || Object.keys(dataRow).length === 0) {
-        console.warn(`[DATA] Row not found in ${dataSheetName} for ${dataIdColumn}='${dataReferenceId}'.`);
+    const dataSheetPath = path.join(__dirname, '../testdata', dataSheetName);
+    let dataRow: Record<string, any> = {};
+
+    if (fs.existsSync(dataSheetPath)) {
+      dataRow = readExcelData(dataSheetPath, dataSheetTab || '', dataReferenceId, dataIdColumn) || {};
+    } else {
+      const altPath = path.join(__dirname, '../data', dataSheetName);
+      if (fs.existsSync(altPath)) {
+        dataRow = readExcelData(altPath, dataSheetTab || '', dataReferenceId, dataIdColumn) || {};
       }
-    } else if (dataSheetName) {
-      console.warn(`[DATA] DatasheetName provided but ReferenceID/IDName missing for ${testCaseId}. Generated defaults will be used.`);
     }
 
-    // LOGIN STEP (Step 0) - Always first
-    await namedStep("Step 0 - Login", page, testinfo, async () => {
-      await loginPage.goto();
-      await loginPage.login(process.env.USERID ?? '', process.env.PASSWORD ?? '');
-      const screenshot = await page.screenshot();
-      attachScreenshot("Step 0 - Login", testinfo, screenshot);
-    });
-
-    // TEST STEPS - Start from Step 1
+    // TEST STEPS
     await namedStep("Step 1 - Click element", page, testinfo, async () => {
       // Click element
       await {flowname}page.elementName.click();

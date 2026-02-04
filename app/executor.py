@@ -32,12 +32,7 @@ def _resolve_playwright_command(tmp_path: str, headed: bool, project_root: Optio
     if headed:
         base_args.append("--headed")
 
-    # Prefer npx if available on PATH
-    npx_path = shutil.which("npx") or shutil.which("npx.cmd")
-    if npx_path:
-        return [npx_path, "playwright", *base_args], cwd
-
-    # Fallback to node_modules binaries
+    # Prefer local node_modules binaries first to avoid version conflicts
     bin_dir_win = project_root / "node_modules" / ".bin" / "playwright.cmd"
     bin_dir_unix = project_root / "node_modules" / ".bin" / "playwright"
     if bin_dir_win.exists():
@@ -154,42 +149,20 @@ def run_trial_in_framework(script_content: str, framework_root: Path, headed: bo
     This avoids 'No tests found' when testDir excludes system temp locations.
     """
     try:
-        # Apply trial adapter transformations
+        # Apply trial adapter transformations BEFORE writing to file
         try:
-            from trial_spec_adapter import adapt_spec_content_for_trial
-            script_content, _ = adapt_spec_content_for_trial(script_content, framework_root)
+            # Ensure parent directory is in sys.path for import
+            parent_dir = str(Path(__file__).resolve().parent.parent)
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            from app.trial_spec_adapter import adapt_spec_content_for_trial
+            print(f"[Executor] Applying trial adapter to script (length: {len(script_content)})")
+            script_content, adapted = adapt_spec_content_for_trial(script_content, framework_root)
+            print(f"[Executor] Trial adapter result: adapted={adapted}, new length={len(script_content)}")
         except Exception as e:
             print(f"[Executor] Trial adapter failed: {e}")
-        
-        # Inject parallel data resolver inline - check multiple patterns
-        original_script = script_content
-        patterns = [
-            ("const dataReferenceId = String(testRow?.['ReferenceID'] ?? '').trim() || defaultReferenceId;",
-             """const rawReferenceId = String(testRow?.['ReferenceID'] ?? '').trim() || defaultReferenceId;
-    const dataReferenceId = (() => {
-      if (!rawReferenceId.includes(',')) return rawReferenceId;
-      const ids = rawReferenceId.split(',').map(id => id.trim()).filter(id => id);
-      const workerIndex = testinfo.parallelIndex ?? 0;
-      const assignedId = ids[workerIndex % ids.length];
-      console.log(`[ParallelData] Worker ${workerIndex} assigned: ${assignedId} from [${ids.join(', ')}]`);
-      return assignedId;
-    })();"""),
-        ]
-        
-        for old_pattern, new_pattern in patterns:
-            if old_pattern in script_content:
-                script_content = script_content.replace(old_pattern, new_pattern, 1)
-                print(f"[Executor] ✓ Injected parallel data resolver")
-                break
-        else:
-            # Pattern not found - log for debugging
-            if "dataReferenceId" in script_content:
-                print("[Executor] ⚠ dataReferenceId found but pattern didn't match")
-                # Show the actual line for debugging
-                for line in script_content.split('\n'):
-                    if 'dataReferenceId' in line and 'const' in line:
-                        print(f"[Executor] Found line: {line.strip()[:100]}")
-                        break
+            import traceback
+            traceback.print_exc()
         
         test_dir = _detect_test_dir(framework_root)
         test_dir.mkdir(parents=True, exist_ok=True)
